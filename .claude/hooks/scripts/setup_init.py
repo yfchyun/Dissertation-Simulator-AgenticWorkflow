@@ -63,6 +63,20 @@ REQUIRED_SCRIPTS = [
     "validate_translation.py",
     "validate_verification.py",
     "validate_workflow.py",
+    # Thesis workflow scripts (Phase A)
+    "checklist_manager.py",
+    "guard_sot_write.py",
+    # Thesis GRA validation hooks (Phase C)
+    "validate_grounded_claim.py",
+    "validate_srcs_threshold.py",
+    "validate_task_completion.py",
+    "validate_thesis_output.py",
+    "teammate_health_check.py",
+    # Thesis P1 hallucination prevention (Phase E)
+    "validate_wave_gate.py",
+    "compute_srcs_scores.py",
+    "fallback_controller.py",
+    "validate_step_sequence.py",
 ]
 
 # Severity levels
@@ -233,7 +247,7 @@ def _check_scripts_completeness(scripts_dir):
         for entry in os.listdir(scripts_dir):
             if (entry.endswith(".py")
                     and not entry.startswith("__")
-                    and not entry.startswith("test_")
+                    and not entry.startswith(("test_", "_test_"))
                     and entry not in _SELF_VALIDATING
                     and os.path.isfile(os.path.join(scripts_dir, entry))):
                 actual_files.add(entry)

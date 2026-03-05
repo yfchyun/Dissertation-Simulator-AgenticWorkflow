@@ -55,6 +55,7 @@
 | 재사용 모듈 (Skills) | `@file.md` import로 도메인 지식 주입 |
 | 외부 연동 (MCP) | Gemini extensions 또는 외부 API 스크립트 |
 | SOT 상태관리 | `state.yaml` 파일 — 단일 쓰기 지점 원칙 동일 적용 |
+| 논문 SOT (`session.json`) | `thesis-output/[project]/session.json` 파일 — `checklist_manager.py` CLI로 관리. 시스템 SOT와 독립 |
 | Autopilot Mode | SOT의 `autopilot.enabled` 필드로 제어. `(human)` 단계 자동 승인. Anti-Skip Guard(산출물 검증), Decision Log(`autopilot-logs/`) 포함. `AGENTS.md §5.1` 참조 |
 | ULW (Ultrawork) Mode | 프롬프트에 `ulw` 포함 시 활성화. Autopilot과 직교하는 철저함 강도 오버레이. 3가지 강화 규칙(Intensifiers): Sisyphus Persistence(3회 재시도) + Mandatory Task Decomposition + Bounded Retry Escalation. Claude Code Hook 기반 결정론적 Compliance Guard 포함. `AGENTS.md §5.1.1` 참조 |
 | Verification Protocol | 각 단계 산출물의 기능적 목표 100% 달성 검증. Anti-Skip Guard(물리적) 위에 의미론적 Verification Gate 계층. 검증 기준은 Task 앞에 선언, 실패 시 최대 10회 재시도(ULW 활성 시 15회). `AGENTS.md §5.3` 참조 |
@@ -63,6 +64,19 @@
 | Translation Protocol | 영어 산출물 → 한국어 번역. `@translator` 서브에이전트가 `glossary.yaml` 기반 용어 일관성 유지. P1 검증(`validate_translation.py` T1-T9 + `validate_verification.py` V1a-V1c)으로 번역·검증 품질 보장. Review PASS가 Translation의 전제. `AGENTS.md §5.2` 참조 |
 | Predictive Debugging (L-1) | 에러 이력 기반 위험 파일 사전 경고. `predictive_debug_guard.py`(PreToolUse 경고 전용) + `aggregate_risk_scores()`(SessionStart P1 집계) + `validate_risk_scores()`(RS1-RS6 검증). `risk-scores.json` 캐시. `_context_lib.py` + `docs/protocols/context-preservation-detail.md` 참조 |
 | Abductive Diagnosis | 품질 게이트(Verification/pACS/Review) FAIL → 재시도 사이에 3단계 구조화된 진단 수행. Step A: P1 사전 증거 수집(`diagnose_context.py`), Step B: LLM 원인 분석(가설 ≥ 2개), Step C: P1 사후 검증(`validate_diagnosis.py` AD1-AD10). Fast-Path(FP1-FP3)로 결정론적 단축 가능. `diagnosis-logs/`에 기록. `AGENTS.md §5.6` 참조 |
+
+## Doctoral Thesis Workflow 호환
+
+AgenticWorkflow에는 210-step 박사 논문 연구 시뮬레이션 워크플로우가 포함된다.
+
+| AgenticWorkflow 개념 | Gemini CLI 대응 |
+|---------------------|----------------|
+| 논문 SOT (`session.json`) | `thesis-output/[project]/session.json` — 시스템 SOT(`state.yaml`)와 독립. Gemini에서는 수동 관리 또는 Python 스크립트로 조작 |
+| Wave/Gate/HITL 아키텍처 | Gate(Wave 간 교차 검증)와 HITL(인간 승인)은 `checklist_manager.py` CLI로 구동. Gemini에서 직접 호출 가능 |
+| 48개 논문 전문 에이전트 | Gemini는 단일 세션 모델. 에이전트별 역할을 프롬프트로 명시하여 시뮬레이션 |
+| 25개 Slash Commands | `/thesis-init` 등은 Claude Code 전용. Gemini에서는 `checklist_manager.py --init` 등 CLI 직접 호출 |
+| GroundedClaim 스키마 | `validate_grounded_claim.py`로 claim ID 검증. Gemini 출력도 동일 스키마 준수 필수 |
+| 3-tier Fallback | Team → Sub-agent → Direct. Gemini는 Direct 실행만 가능 |
 
 ## 컨텍스트 보존
 

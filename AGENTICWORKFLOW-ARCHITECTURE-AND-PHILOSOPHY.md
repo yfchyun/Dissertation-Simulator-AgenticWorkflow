@@ -1542,6 +1542,73 @@ error_handling:
 
 ---
 
+## 11. Doctoral Thesis Workflow Architecture
+
+### 11.1 개요
+
+AgenticWorkflow의 DNA 유전 철학(§1.4)을 실증하는 최초의 대규모 자식 시스템이다. 210-step 박사 논문 연구 시뮬레이션으로, 부모의 전체 게놈(절대 기준, SOT, 4계층 QA, Safety Hook)이 논문 도메인에 맞게 발현된다.
+
+### 11.2 Phase/Wave/Gate/HITL 구조
+
+```
+Phase 0: Literature Review (Step 1-104)
+├── Wave 1: Topic Exploration (Step 1-12)
+├── Wave 2: Deep Analysis (Step 13-30)    ── Gate-1 ──▶
+├── Wave 3: Synthesis (Step 31-54)        ── Gate-2 ──▶
+├── Wave 4: Gap Analysis (Step 55-70)     ── Gate-3 ──▶
+└── Wave 5: Framework (Step 71-104)       ── Gate-4 ──▶ HITL-2
+
+Phase 1: Research Design (Step 105-140)   ── HITL-3, HITL-4 ──▶
+                                          ── Gate-5 ──▶
+
+Phase 2: Writing & Publication (Step 141-210)
+├── HITL-5 (Format), HITL-6 (Outline)
+├── HITL-7 (Draft Review)
+└── HITL-8 (Finalization)
+```
+
+- **Gate**: Wave 간 교차 검증. 이전 Wave의 claim 품질이 임계값 미달 시 진행 차단.
+- **HITL**: 인간 승인 필수 지점. 연구 방향, 방법론, 최종 산출물의 인간 검토.
+- **3-tier Fallback**: Team → Sub-agent → Direct 실행. 상위 tier 실패 시 자동 강등.
+
+### 11.3 논문 SOT (`session.json`)
+
+시스템 SOT(`state.yaml`)와 독립된 논문 전용 상태 파일:
+
+| 필드 | 설명 |
+|------|------|
+| `current_step` | 현재 진행 step (0-210) |
+| `total_steps` | 전체 step 수 (210) |
+| `status` | running / completed / error / paused |
+| `gates` | 5개 Gate 상태 (pending/pass/fail) |
+| `hitl_checkpoints` | 9개 HITL 상태 (pending/completed/blocked) |
+| `outputs` | step별 산출물 경로 |
+| `fallback_history` | Fallback 이벤트 이력 |
+| `context_snapshots` | 체크포인트 이력 |
+
+### 11.4 에이전트 아키텍처 (48 agents)
+
+| 역할 | 에이전트 예시 | Phase |
+|------|------------|-------|
+| 문헌 검색·분석 | topic-explorer, deep-analyzer, synthesis-builder | Phase 0 |
+| 연구 설계 | methodology-architect, sampling-designer | Phase 1 |
+| 집필·편집 | chapter-writer, academic-editor | Phase 2 |
+| 품질 검증 | cross-validator, plagiarism-checker, srcs-evaluator | 전 Phase |
+
+모든 에이전트는 GroundedClaim 스키마(`id, text, claim_type, sources[], confidence, verification`)를 사용하여 claim을 생성하며, 47개 고유 prefix로 출처를 추적한다.
+
+### 11.5 핵심 인프라 스크립트
+
+| 스크립트 | 역할 |
+|---------|------|
+| `checklist_manager.py` | 논문 SOT CRUD — init, advance, gate, HITL, checkpoint |
+| `query_workflow.py` | 논문 관측성 — dashboard, weakest-step, blocked, retry |
+| `validate_grounded_claim.py` | GroundedClaim ID 검증 (47개 prefix) |
+| `fallback_controller.py` | 3-tier Fallback 제어 |
+| `guard_sot_write.py` | 논문 SOT 쓰기 보호 |
+
+---
+
 ## 부록: 용어 정리
 
 | 용어 | 정의 |

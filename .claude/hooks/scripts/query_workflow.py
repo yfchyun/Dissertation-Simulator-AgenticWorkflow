@@ -39,9 +39,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _context_lib import validate_sot_schema
 
 # ---------------------------------------------------------------------------
-# SOT discovery — D-7: must match _context_lib.py:SOT_FILENAMES
+# SOT discovery — extends _context_lib.py:SOT_FILENAMES with thesis SOT (session.json)
 # ---------------------------------------------------------------------------
-_SOT_FILENAMES = ("state.yaml", "state.yml", "state.json")
+_SOT_FILENAMES = ("state.yaml", "state.yml", "state.json", "session.json")
 
 # ---------------------------------------------------------------------------
 # pACS score extraction — context-aware, min()-formula-first strategy
@@ -154,7 +154,7 @@ def _dashboard(project_dir, sot):
     """Overview: current step, pACS history, pending validations."""
     current_step = sot.get("current_step", 0)
     total_steps = sot.get("total_steps", "?")
-    workflow_status = sot.get("workflow_status", "unknown")
+    workflow_status = sot.get("workflow_status") or sot.get("status", "unknown")
 
     # Collect pACS history with typed errors
     pacs_history = {}
@@ -204,6 +204,28 @@ def _dashboard(project_dir, sot):
         "pending_validations": pending,
         "completed_steps": current_step - 1 if isinstance(current_step, int) and current_step > 0 else 0,
     }
+
+    # Thesis SOT extensions (session.json specific fields)
+    if "gates" in sot:
+        gates = sot["gates"]
+        if isinstance(gates, dict):
+            result["gates"] = {
+                k: v.get("status", v) if isinstance(v, dict) else v
+                for k, v in gates.items()
+            }
+    if "hitl_checkpoints" in sot:
+        hitl = sot["hitl_checkpoints"]
+        if isinstance(hitl, dict):
+            result["hitl_checkpoints"] = {
+                k: v.get("status", v) if isinstance(v, dict) else v
+                for k, v in hitl.items()
+            }
+    if "research_type" in sot:
+        result["research_type"] = sot["research_type"]
+    if "fallback_history" in sot:
+        fb = sot["fallback_history"]
+        if isinstance(fb, list):
+            result["fallback_events"] = len(fb)
     if pacs_errors:
         result["pacs_read_errors"] = pacs_errors
     return result
@@ -379,6 +401,29 @@ def _blocked(project_dir, sot):
             "step": current_step,
             "detail": f"Cannot read review log: {err['type']}",
         })
+
+    # Thesis-specific blockers: check gates and HITL checkpoints
+    gates = sot.get("gates", {})
+    if isinstance(gates, dict):
+        for gate_name, gate_val in gates.items():
+            status = gate_val.get("status", gate_val) if isinstance(gate_val, dict) else gate_val
+            if status == "fail":
+                blockers.append({
+                    "type": "gate_fail",
+                    "gate": gate_name,
+                    "detail": f"Cross-validation gate {gate_name} failed",
+                })
+
+    hitl = sot.get("hitl_checkpoints", {})
+    if isinstance(hitl, dict):
+        for hitl_name, hitl_val in hitl.items():
+            status = hitl_val.get("status", hitl_val) if isinstance(hitl_val, dict) else hitl_val
+            if status == "blocked":
+                blockers.append({
+                    "type": "hitl_blocked",
+                    "checkpoint": hitl_name,
+                    "detail": f"HITL checkpoint {hitl_name} is blocked — requires human input",
+                })
 
     return {
         "mode": "blocked",

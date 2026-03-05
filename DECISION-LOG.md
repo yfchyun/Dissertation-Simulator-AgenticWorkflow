@@ -746,6 +746,71 @@
 
 ---
 
+## 9. Doctoral Thesis Workflow (논문 워크플로우)
+
+### ADR-052: Doctoral Thesis Workflow — 210-step 논문 시뮬레이션
+
+- **날짜**: 2026-03-05
+- **상태**: Accepted
+- **맥락**: AgenticWorkflow의 DNA 유전 철학을 검증할 대규모 자식 시스템이 필요했다. 박사 논문 연구 과정은 문헌 검토 → 연구 설계 → 집필 → 출판까지 복잡한 의존성과 품질 게이트를 갖는 이상적인 테스트 케이스였다.
+- **결정**: 210-step 3-Phase 구조 채택:
+  - Phase 0 (Literature Review): Wave 1-5, 각 Wave 10-15 step, Gate로 교차 검증
+  - Phase 1 (Research Design): 방법론·샘플링·도구 설계, HITL 승인
+  - Phase 2 (Writing & Publication): 집필·편집·투고, 연구 유형별 분기
+  - 48개 전문 에이전트, 5개 Gate, 9개 HITL 체크포인트
+- **근거**: Wave/Gate/HITL 아키텍처는 부모의 4계층 QA를 논문 도메인에 맥락화한 것이다. Gate는 L1(Verification), HITL은 인간 검토로 품질을 이중 보장한다. 48개 에이전트는 P2(전문성 기반 위임)의 극대화다.
+- **대안**:
+  - 단순 선형 워크플로우 → 기각 (교차 검증 불가, 품질 보장 없음)
+  - 범용 연구 도구 → 기각 (박사 논문의 엄밀성 요구 미충족)
+- **관련 커밋**: 논문 워크플로우 구현 일련
+
+### ADR-053: E2E Test Infrastructure — 5-Track 통합 테스트
+
+- **날짜**: 2026-03-05
+- **상태**: Accepted
+- **맥락**: checklist_manager.py와 query_workflow.py가 논문 SOT의 핵심 인프라가 되면서, CLI 수준의 통합 테스트가 필수가 되었다. 유닛 테스트만으로는 컴포넌트 간 데이터 흐름을 검증할 수 없었다.
+- **결정**: pytest + subprocess 기반 E2E 테스트 인프라 구축. 5개 Track으로 분류:
+  - Track 1: Full Lifecycle (init → advance → gate → HITL → checkpoint → restore)
+  - Track 2: SOT Integrity (스키마 검증, 필드 일관성, 원자적 쓰기)
+  - Track 3: Cross-Component (checklist_manager ↔ query_workflow ↔ generate_context_summary)
+  - Track 4: CLI Flag Completeness (모든 argparse 플래그 성공/에러 시나리오)
+  - Track 5: Error Recovery (손상 SOT, 누락 파일, 의존성 적용, 체크포인트 복구)
+- **근거**: CLI 수준 테스트는 실제 사용자 시나리오를 재현한다. 5-Track 분류는 실패 원인 격리를 용이하게 한다.
+- **대안**:
+  - 함수 단위 유닛 테스트만 → 기각 (컴포넌트 간 통합 검증 불가)
+  - Playwright E2E → 기각 (웹 UI 없음, CLI 기반 시스템)
+- **관련 커밋**: E2E 테스트 구현 일련
+
+### ADR-054: GroundedClaim Schema Unification — 47개 prefix 체계
+
+- **날짜**: 2026-03-05
+- **상태**: Accepted
+- **맥락**: 48개 논문 에이전트가 각자 claim을 생성하는데, claim ID 형식이 불일치하면 교차 검증과 추적이 불가능해진다.
+- **결정**: Family-based prefix 체계로 통합:
+  - 형식: `{PREFIX}-{NUMBER}` (예: `LS-001`, `SA-TA001`, `PC-SRCS-001`)
+  - 47개 고유 prefix — 에이전트별 2자리 대문자 + 선택적 서브 prefix
+  - `validate_grounded_claim.py`로 결정론적 검증
+  - 통합 스키마: `id, text, claim_type, sources[], confidence (0-100), verification`
+- **근거**: 통합 ID 체계는 절대 기준 2(SOT)의 claim 차원 적용이다. 결정론적 검증은 P1(데이터 정제)의 claim 차원 적용이다.
+- **대안**:
+  - 자유형식 ID → 기각 (교차 참조 불가, 중복 감지 불가)
+  - 단일 prefix → 기각 (에이전트 출처 추적 불가)
+- **관련 커밋**: GroundedClaim 스키마 구현 일련
+
+### ADR-055: --record-hitl CLI Extension
+
+- **날짜**: 2026-03-05
+- **상태**: Accepted
+- **맥락**: HITL 체크포인트 기록이 Python API(`cm.record_hitl()`)로만 가능했다. Slash Command에서 CLI를 통해 HITL을 기록해야 하는데, CLI 인터페이스가 없었다.
+- **결정**: `checklist_manager.py`에 `--record-hitl` 플래그 추가. `--hitl-status`로 상태 지정 가능 (기본값: `completed`).
+- **근거**: CLI 인터페이스는 Slash Command, 외부 스크립트, E2E 테스트에서 모두 사용 가능한 범용 진입점이다.
+- **대안**:
+  - Python API만 유지 → 기각 (CLI에서 호출 불가)
+  - 별도 스크립트 → 기각 (checklist_manager.py에 이미 CLI 인프라 존재)
+- **관련 커밋**: --record-hitl 구현
+
+---
+
 ## 부록: 커밋 히스토리 기반 타임라인
 
 | 날짜 | 커밋 | 결정 |
@@ -786,6 +851,10 @@
 | 2026-02-23 | (pending) | ADR-047: Abductive Diagnosis Layer — 품질 게이트 FAIL 시 구조화된 진단 |
 | 2026-02-23 | accepted | ADR-048: 전수조사 기반 시스템 일관성 강화 — 재시도 한도 10/15 + P1 doc-code sync + D-7 #5 |
 | 2026-03-01 | accepted | ADR-049: CLAUDE.md 경량화 — TOC 패턴 전환 (512→160줄, docs/protocols/ 분리) |
+| 2026-03-05 | accepted | ADR-052: Doctoral Thesis Workflow — 210-step 논문 시뮬레이션 + 48 에이전트 + Wave/Gate/HITL |
+| 2026-03-05 | accepted | ADR-053: E2E Test Infrastructure — 5-Track pytest + subprocess 통합 테스트 |
+| 2026-03-05 | accepted | ADR-054: GroundedClaim Schema Unification — 47개 family-based prefix 체계 |
+| 2026-03-05 | accepted | ADR-055: --record-hitl CLI Extension — HITL 체크포인트 CLI 기록 |
 
 ---
 

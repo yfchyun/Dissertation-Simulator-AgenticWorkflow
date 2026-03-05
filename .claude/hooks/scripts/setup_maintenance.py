@@ -66,6 +66,20 @@ REQUIRED_SCRIPTS = [
     "validate_translation.py",
     "validate_verification.py",
     "validate_workflow.py",
+    # Thesis workflow scripts (Phase A)
+    "checklist_manager.py",
+    "guard_sot_write.py",
+    # Thesis GRA validation hooks (Phase C)
+    "validate_grounded_claim.py",
+    "validate_srcs_threshold.py",
+    "validate_task_completion.py",
+    "validate_thesis_output.py",
+    "teammate_health_check.py",
+    # Thesis P1 hallucination prevention (Phase E)
+    "validate_wave_gate.py",
+    "compute_srcs_scores.py",
+    "fallback_controller.py",
+    "validate_step_sequence.py",
 ]
 
 # Severity levels

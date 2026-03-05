@@ -1,7 +1,6 @@
 .DS_Store
 __pycache__/
 *.pdf
-!coding-resource/*.pdf
 
 # Context Preservation System — session-specific runtime data
 .claude/context-snapshots/
@@ -15,8 +14,15 @@ diagnosis-logs/
 translations/*
 !translations/glossary.yaml
 
+# Thesis workflow runtime data
+thesis-output/
+fallback-logs/
+
 # TDD Guard toggle — personal workflow setting (not shared)
 .tdd-guard
 
 # Setup Hook logs — runtime diagnostics (regenerated on each run)
 .claude/hooks/*.log
+
+# Runtime-generated nested .claude directories (setup_init.py artifact)
+.claude/hooks/scripts/.claude/

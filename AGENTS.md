@@ -1232,3 +1232,62 @@ AGENTS.md의 절대 기준이 변경되면, 모든 Spoke 파일의 인라인 복
 - `CLAUDE.md`, `GEMINI.md` — 직접 수정
 - `.cursor/rules/` — 인라인 부분 수정
 - `.github/copilot-instructions.md` — 인라인 부분 수정
+
+---
+
+## 10. Doctoral Thesis Workflow
+
+### 10.1 개요
+
+210-step 박사 논문 연구 시뮬레이션 워크플로우. AgenticWorkflow의 DNA 유전 철학을 실증하는 최초의 대규모 자식 시스템이다.
+
+- **Phase 0** (Step 1-104): Literature Review — 5 Wave, 4 Gate
+- **Phase 1** (Step 105-140): Research Design — 1 Gate, HITL-3/4
+- **Phase 2** (Step 141-210): Writing & Publication — HITL-5~8
+- **48개 전문 에이전트**: 문헌 검색·분석·연구 설계·작성·출판
+- **논문 SOT**: `session.json` (시스템 SOT `state.yaml`과 독립)
+
+### 10.2 GroundedClaim 스키마
+
+모든 논문 에이전트는 통합 GroundedClaim 스키마를 사용한다:
+
+```json
+{
+  "id": "LS-001",
+  "text": "claim text",
+  "claim_type": "empirical|theoretical|methodological",
+  "sources": ["source1", "source2"],
+  "confidence": 85,
+  "verification": "verified|unverified|partial"
+}
+```
+
+- **47개 고유 prefix**: 에이전트별 2자리 대문자 + 선택적 서브 prefix
+- **검증**: `validate_grounded_claim.py`로 ID 형식·스키마 결정론적 검증
+
+### 10.3 Wave/Gate/HITL 아키텍처
+
+| 구성요소 | 역할 | 부모 QA 대응 |
+|---------|------|-------------|
+| Gate (5개) | Wave 간 교차 검증. Claim 품질 임계값 미달 시 진행 차단 | L1 Verification Gate |
+| HITL (9개) | 인간 승인 필수 지점. 연구 방향·방법론·최종 산출물 | L2 Adversarial Review |
+| 3-tier Fallback | Team → Sub-agent → Direct 실행 | P2 전문성 기반 위임 |
+| Checkpoint | SOT + 체크리스트 스냅샷 저장·복원 | Context Preservation |
+
+### 10.4 핵심 인프라
+
+| 스크립트 | 역할 |
+|---------|------|
+| `checklist_manager.py` | 논문 SOT CRUD (init/advance/gate/HITL/checkpoint/validate) |
+| `query_workflow.py` | 논문 관측성 (dashboard/weakest-step/blocked/retry) |
+| `validate_grounded_claim.py` | GroundedClaim ID·스키마 검증 |
+| `fallback_controller.py` | 3-tier Fallback 제어 |
+
+### 10.5 E2E 테스트
+
+`tests/e2e/` 디렉터리에 5-Track 통합 테스트:
+1. **Lifecycle**: init → advance → gate → HITL → checkpoint → restore
+2. **SOT Integrity**: 스키마 검증, 필드 일관성, 원자적 쓰기
+3. **Cross-Component**: checklist_manager ↔ query_workflow ↔ generate_context_summary
+4. **CLI Flags**: 모든 argparse 플래그 성공/에러 시나리오
+5. **Error Recovery**: 손상 SOT, 누락 파일, 의존성 적용, 체크포인트 복구

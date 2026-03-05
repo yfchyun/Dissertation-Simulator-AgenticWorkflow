@@ -102,6 +102,11 @@ def main():
         sot_content=sot_content,
     )
 
+    # Inject thesis state if any thesis project exists
+    thesis_summary = _get_thesis_state_summary(project_dir)
+    if thesis_summary:
+        md_content += thesis_summary
+
     # Atomic write: timestamped snapshot
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{timestamp}_stop.md"
@@ -202,6 +207,64 @@ def main():
 
     # Cleanup old snapshots
     cleanup_snapshots(snapshot_dir)
+
+
+def _get_thesis_state_summary(project_dir):
+    """Read thesis SOT(s) and return a brief state summary for the snapshot.
+
+    Non-blocking: returns empty string on any error.
+    Only reads session.json — never modifies it.
+    """
+    try:
+        thesis_root = os.path.join(project_dir, "thesis-output")
+        if not os.path.isdir(thesis_root):
+            return ""
+
+        summaries = []
+        for proj_name in sorted(os.listdir(thesis_root)):
+            sot_path = os.path.join(thesis_root, proj_name, "session.json")
+            if not os.path.isfile(sot_path):
+                continue
+            with open(sot_path, "r", encoding="utf-8") as f:
+                sot = json.load(f)
+
+            step = sot.get("current_step", 0)
+            total = sot.get("total_steps", "?")
+            status = sot.get("status", "unknown")
+            rtype = sot.get("research_type", "undecided")
+
+            # Gate summary
+            gates = sot.get("gates", {})
+            gate_str = ", ".join(
+                f"{k}:{v.get('status', v) if isinstance(v, dict) else v}"
+                for k, v in gates.items()
+            ) if gates else "none"
+
+            # HITL summary
+            hitl = sot.get("hitl_checkpoints", {})
+            completed_hitl = [
+                k for k, v in hitl.items()
+                if (v.get("status") if isinstance(v, dict) else v) == "completed"
+            ]
+            hitl_str = ", ".join(completed_hitl) if completed_hitl else "none"
+
+            summaries.append(
+                f"  - **{proj_name}**: step {step}/{total}, "
+                f"status={status}, type={rtype}\n"
+                f"    - Gates: {gate_str}\n"
+                f"    - HITL completed: {hitl_str}"
+            )
+
+        if not summaries:
+            return ""
+
+        return (
+            "\n\n## Thesis Workflow State\n\n"
+            + "\n".join(summaries)
+            + "\n"
+        )
+    except Exception:
+        return ""  # Non-blocking
 
 
 def _read_offset(offset_file):

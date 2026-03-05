@@ -42,8 +42,10 @@ AgenticWorkflow/
 ├── GEMINI.md                        ← Gemini CLI 전용 (Spoke)
 ├── soul.md                          ← DNA 유전 정의
 ├── DECISION-LOG.md                  ← 설계 결정 로그 (ADR)
-├── AGENTICWORKFLOW-USER-MANUAL.md
-├── AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md
+├── DISSERTATION-SIMULATOR-ARCHITECTURE-AND-PHILOSOPHY.md  ← 자식 시스템 아키텍처
+├── DISSERTATION-SIMULATOR-USER-MANUAL.md                  ← 자식 시스템 사용자 매뉴얼
+├── AGENTICWORKFLOW-USER-MANUAL.md                         ← 부모 프레임워크 사용법
+├── AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md         ← 부모 프레임워크 설계 철학
 ├── docs/protocols/                  ← 상세 프로토콜 (on-demand 참조)
 │   ├── autopilot-execution.md       (워크플로우 실행 체크리스트 + NEVER DO)
 │   ├── quality-gates.md             (L0-L2 4계층 + P1 검증 14항목 상세)
@@ -52,14 +54,18 @@ AgenticWorkflow/
 │   └── code-change-protocol.md      (CCP 3단계 + CAP + 비례성 규칙)
 ├── .claude/
 │   ├── settings.json                ← Hook 설정
-│   ├── agents/
+│   ├── agents/                      ← Sub-agent 정의 (51개: 기반 3 + 논문 48)
 │   │   ├── translator.md            (영→한 번역, glossary 기반)
 │   │   ├── reviewer.md              (적대적 리뷰어, Enhanced L2)
-│   │   └── fact-checker.md          (사실 검증, claim-by-claim)
-│   ├── commands/
+│   │   ├── fact-checker.md          (사실 검증, claim-by-claim)
+│   │   ├── thesis-orchestrator.md   (논문 워크플로우 총괄 — Wave/Gate/HITL 관리)
+│   │   └── ... (48개 논문 전문 에이전트 — 문헌 검색·분석·연구 설계·작성·출판)
+│   ├── commands/                    ← Slash Commands (28개: 시스템 2 + 라우터 1 + 논문 25)
+│   │   ├── start.md                 (/start — 자연어 시작 트리거 → 스마트 라우터)
 │   │   ├── install.md               (/install — Setup Init 검증)
-│   │   └── maintenance.md           (/maintenance — 건강 검진)
-│   ├── hooks/scripts/               ← Hook + 검증 스크립트
+│   │   ├── maintenance.md           (/maintenance — 건강 검진)
+│   │   └── thesis-*.md (25개)       (/thesis-init, /thesis-start, /thesis-status 등 — 논문 워크플로우)
+│   ├── hooks/scripts/               ← Hook + 검증 스크립트 (35개 프로덕션 + 14개 테스트)
 │   │   ├── context_guard.py         (통합 디스패처)
 │   │   ├── _context_lib.py          (공유 라이브러리 — 파싱·생성·검증·압축)
 │   │   ├── save_context.py          (SessionEnd/PreCompact 저장)
@@ -81,16 +87,34 @@ AgenticWorkflow/
 │   │   ├── block_destructive_commands.py (위험 명령+네트워크+시스템 차단, exit 2)
 │   │   ├── block_test_file_edit.py  (TDD Guard, .tdd-guard 토글)
 │   │   ├── predictive_debug_guard.py (위험 파일 경고, exit 0)
-│   │   ├── output_secret_filter.py  (시크릿 탐지, 3-tier 추출, 25+ 패턴, 2-패스 스캔, 131 테스트)
+│   │   ├── output_secret_filter.py  (시크릿 탐지, 3-tier 추출, 25+ 패턴, 2-패스 스캔)
 │   │   ├── security_sensitive_file_guard.py (보안 민감 파일 경고, 12 패턴)
-│   │   ├── query_workflow.py        (워크플로우 관측성 — dashboard/weakest/retry/blocked, P1: SOT 스키마 검증 + context-aware pACS 추출)
-│   │   ├── _test_secret_filter.py   (output_secret_filter 테스트 — 44개)
-│   │   ├── _test_sensitive_file_guard.py (security_sensitive_file_guard 테스트 — 44개)
-│   │   └── _test_block_destructive.py (block_destructive_commands 테스트 — 43개)
+│   │   ├── query_workflow.py        (워크플로우 관측성 — dashboard/weakest/retry/blocked)
+│   │   ├── checklist_manager.py     (논문 SOT 관리 — init/advance/gate/HITL/checkpoint)
+│   │   ├── validate_grounded_claim.py (GroundedClaim 스키마 검증 — 47개 prefix)
+│   │   ├── guard_sot_write.py       (SOT 쓰기 보호 — 병렬 에이전트 충돌 방지)
+│   │   ├── validate_thesis_output.py (논문 산출물 품질 검증)
+│   │   ├── validate_wave_gate.py    (Wave/Gate 교차 검증)
+│   │   ├── validate_step_sequence.py (스텝 순서 검증 — 의존성 적용)
+│   │   ├── validate_task_completion.py (태스크 완료 검증)
+│   │   ├── validate_srcs_threshold.py (SRCS 임계값 검증)
+│   │   ├── compute_srcs_scores.py   (SRCS 4축 점수 계산)
+│   │   ├── fallback_controller.py   (3-tier Fallback — Team→Sub-agent→Direct)
+│   │   ├── teammate_health_check.py (팀메이트 건강 점검)
+│   │   └── _test_*.py (14개)        (유닛 테스트 — 각 프로덕션 스크립트 대응)
 │   ├── context-snapshots/           ← 런타임 (gitignored)
 │   └── skills/
 │       ├── workflow-generator/      (워크플로우 설계·생성)
-│       └── doctoral-writing/        (박사급 학술 글쓰기)
+│       ├── doctoral-writing/        (박사급 학술 글쓰기)
+│       ├── skill-creator/           (스킬 메타 생성기)
+│       └── subagent-creator/        (에이전트 메타 생성기)
+├── tests/e2e/                       ← E2E 통합 테스트 (5 Track, 108+ 테스트)
+│   ├── conftest.py                  (공유 Fixture — run_cm, run_qw, read_sot)
+│   ├── test_e2e_lifecycle.py        (Track 1: 전체 라이프사이클)
+│   ├── test_e2e_sot_integrity.py    (Track 2: SOT 무결성)
+│   ├── test_e2e_cross_component.py  (Track 3: 컴포넌트 간 통합)
+│   ├── test_e2e_cli_flags.py        (Track 4: CLI 플래그 완전성)
+│   └── test_e2e_error_recovery.py   (Track 5: 에러 복구)
 ├── translations/glossary.yaml       ← 번역 용어 사전
 ├── prompt/                          ← 프롬프트 자료
 └── coding-resource/                 ← 이론적 기반 자료
@@ -125,6 +149,27 @@ AgenticWorkflow/
 |----------------|------|--------|
 | "워크플로우 만들어줘", "자동화 파이프라인 설계" | `workflow-generator` | SKILL.md |
 | "논문 스타일로 써줘", "학술적 글쓰기" | `doctoral-writing` | SKILL.md |
+| "에이전트 만들어줘", "서브에이전트 생성" | `subagent-creator` | SKILL.md |
+| "스킬 만들어줘", "새 스킬 생성" | `skill-creator` | SKILL.md |
+
+### 자연어 시작 트리거 (Smart Router)
+
+사용자가 다음과 같은 **시작 의도의 자연어**를 입력하면 `/start` 라우터를 실행한다:
+
+| 패턴 (한국어) | 패턴 (영어) |
+|-------------|------------|
+| "시작하자", "시작", "시작해", "시작해줘", "시작합시다" | "start", "let's start", "begin" |
+| "워크플로우를 시작하자", "워크플로우 시작" | "start the workflow" |
+| "논문 작업을 하자", "논문을 시작하자" | "let's work on the thesis" |
+| "논문 시뮬레이터를 시작하자", "시뮬레이터 시작" | "start the simulator" |
+| "시뮬레이션을 시작하자", "시뮬레이션 시작" | "start the simulation" |
+| "연구를 시작하자", "연구 시작" | "start the research" |
+
+**라우팅 규칙**: `thesis-output/` 존재 여부 → 프로젝트 상태 → 적절한 진입점 자동 선택. 상세: `.claude/commands/start.md`
+
+### 논문 워크플로우 (Slash Commands)
+
+`/start` (스마트 라우터) → `/thesis-init` → `/thesis-start` → `/thesis-status` 등 26개 논문 전용 명령어. 210-step 박사 논문 시뮬레이션 워크플로우를 구동하며, Wave/Gate/HITL 아키텍처를 통해 품질을 보장한다. 논문 SOT는 `session.json` (시스템 SOT `state.yaml`과 독립).
 
 ## 설계 원칙
 

@@ -1,4 +1,7 @@
 {
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
   "permissions": {
     "deny": [
       "Bash(curl *|*sh)",
@@ -64,6 +67,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if test -f \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/scripts/validate_grounded_claim.py; then python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/scripts/validate_grounded_claim.py; fi",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PreCompact": [
@@ -116,6 +129,16 @@
           {
             "type": "command",
             "command": "if test -f \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/scripts/predictive_debug_guard.py; then python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/scripts/predictive_debug_guard.py; fi",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if test -f \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/scripts/guard_sot_write.py; then python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/scripts/guard_sot_write.py; fi",
             "timeout": 10
           }
         ]

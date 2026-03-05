@@ -877,3 +877,98 @@ outputs:
 - [ ] SOT 파일 일관성 확인 (절대 기준 2)
 - [ ] 번역 파일(`*.ko.md`) 존재 + 용어 일관성 확인
 - [ ] Hook 게이트 정상 동작 확인
+
+---
+
+## Doctoral Thesis Workflow 사용법
+
+### 개요
+
+210-step 박사 논문 연구 시뮬레이션 워크플로우입니다. Phase 0(문헌 검토) → Phase 1(연구 설계) → Phase 2(집필·출판)의 3단계로, 48개 전문 에이전트가 논문 연구의 전 과정을 지원합니다.
+
+### 빠른 시작
+
+```bash
+# 1. 프로젝트 초기화
+/thesis-init
+
+# 2. 워크플로우 시작
+/thesis-start
+
+# 3. 진행 상태 확인
+/thesis-status
+```
+
+### 주요 Slash Commands
+
+| 명령 | 설명 |
+|------|------|
+| `/thesis-init` | 논문 프로젝트 초기화 (SOT, 체크리스트, 디렉터리 생성) |
+| `/thesis-start` | 워크플로우 시작 또는 계속 |
+| `/thesis-status` | 현재 진행 상태 (step, gate, HITL) 표시 |
+| `/thesis-gate` | Cross-Validation Gate 실행 또는 확인 |
+| `/thesis-checkpoint` | 체크포인트 저장 또는 복원 |
+| `/thesis-resume` | 컨텍스트 리셋 후 워크플로우 재개 |
+| `/thesis-wave-status` | Wave별 상세 상태 (에이전트 출력, 게이트 결과) |
+| `/thesis-srcs` | SRCS 4축 품질 평가 실행 |
+| `/thesis-review-literature` | 문헌 분석 결과 리뷰 (HITL-2) |
+| `/thesis-set-research-type` | 연구 유형 설정 — quantitative/qualitative/mixed |
+| `/thesis-approve-design` | 연구 설계 승인 (HITL-4) |
+| `/thesis-review-draft` | 논문 초고 리뷰 (HITL-7) |
+| `/thesis-finalize` | 논문 최종 확정 (HITL-8) |
+
+### Wave/Gate/HITL 구조
+
+```
+Wave 1-5 (문헌 검토)
+  └── Gate 1-4: Wave 간 교차 검증 — claim 품질 미달 시 진행 차단
+  └── HITL-2: 문헌 분석 종합 인간 승인
+
+Phase 1 (연구 설계)
+  └── HITL-3: 연구 유형 설정
+  └── HITL-4: 연구 설계 승인
+  └── Gate 5: 연구 설계 교차 검증
+
+Phase 2 (집필·출판)
+  └── HITL-5~8: 형식, 개요, 초고, 최종 확정
+```
+
+### 논문 SOT (`session.json`)
+
+시스템 SOT(`state.yaml`)와 독립된 논문 전용 상태 파일입니다. `thesis-output/[project-name]/session.json`에 위치합니다.
+
+```json
+{
+  "project_name": "my-thesis",
+  "current_step": 0,
+  "total_steps": 210,
+  "status": "running",
+  "research_type": "quantitative",
+  "gates": { "gate-1": { "status": "pending" } },
+  "hitl_checkpoints": { "hitl-0": { "status": "pending" } },
+  "outputs": {},
+  "fallback_history": [],
+  "context_snapshots": []
+}
+```
+
+### CLI 직접 사용
+
+Slash Command 대신 `checklist_manager.py`를 직접 호출할 수도 있습니다:
+
+```bash
+# 초기화
+python .claude/hooks/scripts/checklist_manager.py --init --project-dir thesis-output/my-thesis
+
+# 진행
+python .claude/hooks/scripts/checklist_manager.py --advance --step 5 --project-dir thesis-output/my-thesis
+
+# Gate 기록 (Python API)
+python -c "import checklist_manager as cm; cm.record_gate_result('thesis-output/my-thesis', 'gate-1', 'pass')"
+
+# HITL 기록
+python .claude/hooks/scripts/checklist_manager.py --record-hitl hitl-1 --project-dir thesis-output/my-thesis
+
+# 체크포인트
+python .claude/hooks/scripts/checklist_manager.py --save-checkpoint --checkpoint cp-1 --project-dir thesis-output/my-thesis
+```
