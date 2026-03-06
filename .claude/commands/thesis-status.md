@@ -37,6 +37,21 @@ python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/scripts/checklist_manager.py \
 - 체크포인트: {checkpoint_count}개
 ```
 
+### Step 2.5: Translation Coverage
+
+```bash
+python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/scripts/checklist_manager.py \
+  --translation-progress \
+  --project-dir "$CLAUDE_PROJECT_DIR/thesis-output/{project}"
+```
+
+Display in the status block:
+
+```
+- 번역 커버리지: {coverage_pct}% ({translated}/{total_en})
+- 미번역 단계: {missing_steps or "없음"}
+```
+
 ### Step 3: Show Next Steps
 
 Based on current position, display the next 3 pending steps from the checklist.

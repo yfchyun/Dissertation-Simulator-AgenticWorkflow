@@ -1280,6 +1280,42 @@ def get_status(project_dir: Path) -> dict:
     }
 
 
+def get_translation_progress(project_dir: Path) -> dict:
+    """Get translation coverage: which steps have EN but no KO pair.
+
+    Returns: dict with coverage percentage, translated/total counts,
+    and list of missing step numbers.
+    """
+    sot = read_thesis_sot(project_dir)
+    outputs = sot.get("outputs", {})
+
+    # Find all English output steps
+    en_steps = set()
+    ko_steps = set()
+    for key in outputs:
+        if key.endswith("-ko"):
+            # Extract step number from "step-N-ko"
+            parts = key.replace("-ko", "").split("-")
+            if len(parts) >= 2 and parts[-1].isdigit():
+                ko_steps.add(int(parts[-1]))
+        elif key.startswith("step-") and not key.endswith("-ko"):
+            parts = key.split("-")
+            if len(parts) >= 2 and parts[-1].isdigit():
+                en_steps.add(int(parts[-1]))
+
+    missing = sorted(en_steps - ko_steps)
+    translated = len(en_steps & ko_steps)
+    total_en = len(en_steps)
+    coverage_pct = round(translated / total_en * 100, 1) if total_en > 0 else 0.0
+
+    return {
+        "translated": translated,
+        "total_en": total_en,
+        "coverage_pct": coverage_pct,
+        "missing_steps": missing,
+    }
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1343,6 +1379,17 @@ def _cli_status(args):
     print(f"HITL checkpoints: {status['hitls_completed']}")
     print(f"Outputs (EN): {status['outputs_en']}")
     print(f"Outputs (KO): {status['outputs_ko']}")
+
+    # Inline translation coverage
+    try:
+        progress = get_translation_progress(project_dir)
+        if progress["total_en"] > 0:
+            print(f"Translation coverage: {progress['coverage_pct']}% ({progress['translated']}/{progress['total_en']})")
+            if progress["missing_steps"]:
+                print(f"  Missing: steps {', '.join(str(s) for s in progress['missing_steps'][:10])}")
+    except Exception:
+        pass
+
     if status['active_team']:
         print(f"Active team: {status['active_team']}")
     if status['fallback_count'] > 0:
@@ -1469,6 +1516,7 @@ def main():
     group.add_argument("--record-gate", action="store_true", help="Record gate result in SOT")
     group.add_argument("--record-output", action="store_true", help="Record step output path in SOT")
     group.add_argument("--record-translation", action="store_true", help="Record translation output in SOT")
+    group.add_argument("--translation-progress", action="store_true", help="Show translation coverage")
 
     parser.add_argument("--project-name", help="Project name (default: directory name)")
     parser.add_argument("--research-type", choices=sorted(VALID_RESEARCH_TYPES))
@@ -1521,6 +1569,8 @@ def main():
         return _cli_record_output(args)
     elif args.record_translation:
         return _cli_record_translation(args)
+    elif args.translation_progress:
+        return _cli_translation_progress(args)
 
 
 def _cli_is_hitl_blocking(args) -> int:
@@ -1609,6 +1659,27 @@ def _cli_record_translation(args) -> int:
     except Exception as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
+
+
+def _cli_translation_progress(args) -> int:
+    """CLI handler for --translation-progress."""
+    project_dir = Path(args.project_dir)
+    try:
+        progress = get_translation_progress(project_dir)
+    except FileNotFoundError:
+        print(f"No thesis project found at: {project_dir}", file=sys.stderr)
+        return 1
+
+    print(f"Translation coverage: {progress['coverage_pct']}% ({progress['translated']}/{progress['total_en']})")
+    if progress["missing_steps"]:
+        print(f"Missing translations: steps {', '.join(str(s) for s in progress['missing_steps'])}")
+    else:
+        if progress["total_en"] > 0:
+            print("All English outputs have Korean translations.")
+        else:
+            print("No English outputs yet.")
+    print(json.dumps(progress))
+    return 0
 
 
 if __name__ == "__main__":

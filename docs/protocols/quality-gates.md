@@ -51,7 +51,8 @@ SessionStart와 Stop hook 양쪽에서 실행.
 독립 실행 스크립트: `validate_review.py`.
 
 ### (6) Translation P1 검증
-`validate_translation_output()`이 번역 산출물을 7항목으로 검증:
+
+**Layer 1a — 구조 검증 (T1-T9)**: `validate_translation_output()`이 번역 산출물을 7항목으로 검증:
 - T1: 파일 존재, T2: 최소 크기, T3: 영어 원본 존재, T4: .ko.md 확장자, T5: 비-공백, T6: 헤딩 수 ±20%, T7: 코드 블록 수 일치
 
 `check_glossary_freshness()` — glossary 타임스탬프 신선도 (T8).
@@ -59,6 +60,20 @@ SessionStart와 Stop hook 양쪽에서 실행.
 `validate_verification_log()` — 검증 로그 V1a-V1c.
 `validate_translation.py`는 Review verdict=PASS를 필수 체크.
 독립 실행 스크립트: `validate_translation.py`.
+
+**Layer 1b — 콘텐츠 보존 검증 (T10-T12)**: `verify_translation_terms.py`가 영-한 번역의 콘텐츠 보존을 3항목으로 검증:
+- T10: 용어집 준수 — glossary.yaml의 영어 용어가 한국어에서 올바르게 매핑되었는지 (regex 매칭)
+- T11: 숫자/통계 보존 — 영어 원본의 모든 숫자(%, p-value, n=, 4자리 연도, 큰 수)가 한국어에 존재하는지
+- T12: 인용 보존 — (Author, Year) 및 [N] 형식 인용이 한국어에 보존되었는지
+
+P1 준수: 순수 Python regex/문자열 매칭 — LLM 추론 0%. 동일 입력 → 동일 결과.
+Non-blocking: exit 0 (P1 compliant).
+독립 실행 스크립트: `verify_translation_terms.py`.
+
+**Layer 2 — 의미론적 검증 (선택)**: `@translation-verifier` 서브에이전트가 고중요도 단계에서 독립 pACS 평가.
+- Fidelity (Ft), Naturalness (Nt), Completeness (Ct) 3축 평가
+- Layer 1 결과와 교차 검증 (Agreement / Layer 1 only / Semantic only)
+- pACS >= 0.85: PASS, 0.70-0.84: CONDITIONAL, < 0.70: FAIL
 
 ### (7) pACS P1 검증
 `validate_pacs_output()`이 pACS 로그를 6항목으로 검증:

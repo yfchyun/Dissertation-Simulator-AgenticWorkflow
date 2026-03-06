@@ -102,6 +102,7 @@ Phase 4: 출판 전략
 | `/thesis-srcs` | SRCS 4축 품질 평가 실행 |
 | `/thesis-check-plagiarism` | 표절 검사 실행 |
 | `/thesis-fallback-log` | Fallback 이력 조회 (tier 전환, 사유, 품질 영향) |
+| `/thesis-translate` | 특정 step의 한국어 번역 수동 트리거 (3-Layer 품질 검증 포함) |
 
 ### 3.4 학습 모드 명령
 
@@ -303,6 +304,10 @@ python .claude/hooks/scripts/query_workflow.py --blocked --project-dir thesis-ou
 ### SOT 손상
 
 ```bash
+# 번역 진행률 확인
+python .claude/hooks/scripts/checklist_manager.py \
+  --translation-progress --project-dir thesis-output/my-thesis
+
 # SOT 검증
 python .claude/hooks/scripts/checklist_manager.py --validate --project-dir thesis-output/my-thesis
 

@@ -134,7 +134,7 @@ Translation (Step 181-210)
 
 ---
 
-## 3. 에이전트 아키텍처 (48+3 agents)
+## 3. 에이전트 아키텍처 (48+5 agents)
 
 ### 3.1 에이전트 계층 구조
 
@@ -184,7 +184,7 @@ thesis-orchestrator (총괄)
 }
 ```
 
-**43개 고유 Claim Prefix**:
+**47개 고유 Claim Prefix**:
 
 | Phase | 에이전트 | Prefix |
 |-------|---------|--------|
@@ -209,6 +209,28 @@ thesis-orchestrator (총괄)
 | METHODOLOGICAL | 0.30 | 0.35 | 0.10 | 0.25 |
 | INTERPRETIVE | 0.25 | 0.30 | 0.20 | 0.25 |
 | SPECULATIVE | 0.20 | 0.25 | 0.25 | 0.30 |
+
+### 3.4 번역 3-Layer 품질 아키텍처
+
+English-First 강제 원칙에 따라 영어 산출물 완성 후 한국어 번역을 수행하며, 3계층 품질 보장 체계를 적용한다:
+
+```
+Layer 0: @translator Self-Review
+  └── 영→한 번역 후 자기 검토 (glossary 기반 용어 일관성)
+
+Layer 1a: Structural Validation (T1-T9)
+  └── validate_translation.py — 파일 존재, 크기, 헤딩 수 ±20%, 코드 블록 일치 등
+
+Layer 1b: Content Preservation (T10-T12)
+  └── verify_translation_terms.py — 용어집 준수(T10), 숫자/통계 보존(T11), 인용 보존(T12)
+  └── P1 Compliant: 순수 Python regex — LLM 추론 0%
+
+Layer 2: Semantic Verification (선택적)
+  └── @translation-verifier — 독립 pACS 평가
+  └── 3축: Fidelity(Ft), Naturalness(Nt), Completeness(Ct)
+  └── pACS >= 0.85: PASS, 0.70-0.84: CONDITIONAL, < 0.70: FAIL
+  └── Layer 1 결과와 교차 검증 (Agreement / Layer 1 only / Semantic only)
+```
 
 ---
 
@@ -265,9 +287,22 @@ thesis-orchestrator (총괄)
 | `validate_thesis_output.py` | 산출물 파일 존재·크기 검증 | Quality |
 | `validate_srcs_threshold.py` | SRCS 75점 임계값 검증 | Quality |
 | `teammate_health_check.py` | 에이전트 팀 건강 점검 | Resilience |
-| `validate_task_completion.py` | 태스크 완료 검증 | Integrity |
+| `validate_task_completion.py` | 태스크 완료 검증 (CLI-only, Orchestrator 호출) | Integrity |
+| `verify_translation_terms.py` | T10-T12 번역 콘텐츠 보존 검증 (P1) | Quality |
 
-### 4.3 E2E 테스트 (108 tests, 5 Track)
+### 4.3 Context Memory 품질 최적화
+
+컨텍스트 보존 시스템이 thesis 워크플로우에 특화된 품질 최적화를 수행한다:
+
+| 기능 | 역할 | 위치 |
+|------|------|------|
+| **Thesis Continuity Markers** | pending gates + blocked steps를 SessionStart 시 표면화, knowledge-index에 아카이브 | `_context_lib.py` → `restore_context.py` |
+| **Session Type Classification** | 세션을 7개 카테고리(debugging/feature/refactoring/audit/research/writing/translation)로 자동 분류 → KI 검색 정밀도 향상 | `_context_lib.py` |
+| **Quality Gate Trend** | knowledge-index에서 gate pending 이력을 집계, 반복 실패 패턴 감지 시 root cause analysis 권고 | `restore_context.py` |
+
+모든 기능은 P1 compliant (결정론적 Python 추출, LLM 추론 0%), read-only (SOT 수정 없음), additive-only (기존 동작 변경 없음).
+
+### 4.4 E2E 테스트 (108 tests, 5 Track)
 
 | Track | 파일 | 테스트 수 | 검증 대상 |
 |-------|------|---------|---------|

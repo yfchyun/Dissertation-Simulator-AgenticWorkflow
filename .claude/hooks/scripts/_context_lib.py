@@ -3262,6 +3262,139 @@ def _extract_team_summaries(project_dir):
     return None
 
 
+def _get_step_gate_deps():
+    """Get step→gate dependency map from checklist_manager (SOT) with fallback.
+
+    Tries dynamic import of checklist_manager.STEP_DEPENDENCIES first (SOT).
+    Falls back to inline constant if import fails (e.g., circular import).
+
+    P1 Compliance: Deterministic — returns same dict regardless of path.
+    """
+    try:
+        # Dynamic import — avoids top-level circular dependency
+        import importlib
+        cm = importlib.import_module("checklist_manager")
+        step_deps = getattr(cm, "STEP_DEPENDENCIES", None)
+        if isinstance(step_deps, dict):
+            # Extract only gate requirements (not hitl/phase)
+            return {
+                phase: dep["gate"]
+                for phase, dep in step_deps.items()
+                if isinstance(dep, dict) and "gate" in dep
+            }
+    except Exception:
+        pass
+    # Fallback: inline subset (last resort — synced with checklist_manager.py)
+    return {
+        "wave-2": "gate-1", "wave-3": "gate-2",
+        "wave-4": "gate-3", "wave-5": "srcs-full",
+    }
+
+
+def _extract_thesis_continuity(project_dir):
+    """Phase 1-A: Extract pending gates and blocked steps from thesis SOT.
+
+    Iterates thesis-output/{project_name}/session.json (multiple projects).
+    Aggregates across all active thesis projects.
+
+    P1 Compliance: Deterministic JSON extraction.
+    SOT Compliance: Read-only access.
+    Non-blocking: returns None on any error.
+    """
+    if not project_dir:
+        return None
+    try:
+        thesis_root = os.path.join(project_dir, "thesis-output")
+        if not os.path.isdir(thesis_root):
+            return None
+
+        all_pending_gates = []
+        all_blocked_steps = []
+        step_deps = _get_step_gate_deps()
+
+        for proj_name in sorted(os.listdir(thesis_root)):
+            sot_path = os.path.join(thesis_root, proj_name, "session.json")
+            if not os.path.isfile(sot_path):
+                continue
+            try:
+                with open(sot_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(data, dict):
+                continue
+
+            # Skip completed/paused projects
+            status = data.get("status", "")
+            if status in ("completed", "paused"):
+                continue
+
+            gates = data.get("gates", {})
+            if not isinstance(gates, dict):
+                continue
+
+            # Pending gates: gates with status != "pass"
+            for gname, gdata in gates.items():
+                if isinstance(gdata, dict) and gdata.get("status") != "pass":
+                    label = f"{gname} ({proj_name})" if proj_name else gname
+                    all_pending_gates.append(label)
+
+            # Blocked steps: phases whose required gate hasn't passed
+            for phase, required_gate in step_deps.items():
+                gate_data = gates.get(required_gate, {})
+                if isinstance(gate_data, dict) and gate_data.get("status") != "pass":
+                    all_blocked_steps.append(
+                        f"{phase} (requires {required_gate}, {proj_name})"
+                    )
+
+        result = {}
+        if all_pending_gates:
+            result["pending_gates"] = sorted(all_pending_gates)
+        if all_blocked_steps:
+            result["blocked_steps"] = sorted(all_blocked_steps)
+        return result if result else None
+    except Exception:
+        return None
+
+
+def _classify_session_type(user_task, last_instruction, phase):
+    """Phase 1-B: Classify session type deterministically.
+
+    Categories: debugging, feature, refactoring, audit, research, writing, translation.
+    Uses keyword matching on user_task + last_instruction.
+
+    P1 Compliance: Pure regex/string matching — no LLM inference.
+    Word boundaries (\b) prevent false positives (e.g., "prefix" ≠ "fix").
+    Korean keywords don't need \b (Korean characters are inherently boundary-forming).
+    Returns: string category or empty string.
+    """
+    text = f"{user_task} {last_instruction}".lower()
+
+    # Priority-ordered pattern matching
+    # English patterns use \b word boundaries; Korean patterns match as-is
+    patterns = [
+        ("debugging", [r"\bbug\b", r"\bfix\b", r"\berror\b", r"에러", r"디버그", r"오류"]),
+        ("audit", [r"\baudit\b", r"검수", r"성찰", r"전수조사", r"\binspect", r"\breview\b"]),
+        ("refactoring", [r"\brefactor", r"리팩", r"\bclean.?up\b", r"정리", r"\breorganiz"]),
+        ("translation", [r"\btranslat", r"번역", r"\bglossary\b", r"용어"]),
+        ("writing", [r"\bwrit(?:e|ing)\b", r"작성", r"\bdraft\b", r"논문", r"\bthesis\b", r"\bchapter\b"]),
+        ("research", [r"\bresearch", r"연구", r"\bliterature\b", r"문헌", r"\bsurvey\b"]),
+        ("feature", [r"\bfeat", r"\badd\b", r"\bimplement", r"구현", r"추가", r"생성", r"\bcreate\b"]),
+    ]
+    for category, keywords in patterns:
+        for kw in keywords:
+            if re.search(kw, text):
+                return category
+
+    # Fallback: infer from phase if no keyword match
+    phase_map = {
+        "exploration": "research",
+        "implementation": "feature",
+        "debugging": "debugging",
+    }
+    return phase_map.get(phase, "")
+
+
 def extract_session_facts(session_id, trigger, project_dir, entries, token_estimate=0):
     """Extract deterministic session facts for knowledge-index.jsonl.
 
@@ -3509,6 +3642,18 @@ def extract_session_facts(session_id, trigger, project_dir, entries, token_estim
     rejected_hypotheses = _extract_hypothesis_graveyard(entries)
     if rejected_hypotheses:
         facts["rejected_hypotheses"] = rejected_hypotheses
+
+    # 8. Phase 1-A: Thesis pending gates + blocked steps (session continuity markers)
+    # Read thesis SOT (session.json) directly — no import from checklist_manager
+    # to avoid circular dependency. Lightweight JSON read, read-only.
+    thesis_continuity = _extract_thesis_continuity(project_dir)
+    if thesis_continuity:
+        facts["thesis_continuity"] = thesis_continuity
+
+    # 9. Phase 1-B: Session type classification (deterministic)
+    session_type = _classify_session_type(user_task, last_instruction, phase)
+    if session_type:
+        facts["session_type"] = session_type
 
     # Mark ETERNAL fields for archival protection
     facts["_eternal_fields"] = ["team_summaries", "diagnosis_patterns", "design_decisions"]

@@ -37,6 +37,7 @@ from _context_lib import (
     validate_step_output, validate_sot_schema, sot_paths,
     extract_path_tags, aggregate_risk_scores, atomic_write,
     SNAPSHOT_SECTION_MARKERS,
+    _extract_thesis_continuity,  # Phase 1-A: reuse from shared lib (no duplication)
 )
 
 
@@ -423,6 +424,262 @@ def _verify_sot_consistency(snapshot_content, project_dir):
     return None
 
 
+# =============================================================================
+# MEMORY.md Health Check (Improvement A — deterministic, P1 compliant)
+# =============================================================================
+
+# Pre-compiled regex for duplicate header detection
+_MEMORY_HEADER_RE = re.compile(r'^(#{1,3})\s+(.+)$', re.MULTILINE)
+
+
+def _check_memory_health(project_dir):
+    """Deterministic health check for MEMORY.md (auto memory file).
+
+    P1 Compliance: All checks are string/regex operations — zero LLM inference.
+    Returns: list of warning strings (empty if healthy).
+
+    Checks:
+      MH-1: Line count > 200 (system truncation threshold)
+      MH-2: Duplicate ## headers (same header text appears 2+ times)
+      MH-3: Empty sections (## header followed immediately by another ## header)
+      MH-4: Nearly empty file (< 3 content lines)
+    """
+    warnings = []
+
+    # Locate MEMORY.md — Claude's auto memory directory
+    # Convention: ~/.claude-*/projects/{project-hash}/memory/MEMORY.md
+    memory_path = _find_memory_md(project_dir)
+    if not memory_path or not os.path.exists(memory_path):
+        return warnings  # No MEMORY.md — not an error, just nothing to check
+
+    try:
+        with open(memory_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception:
+        return warnings
+
+    lines = content.split("\n")
+    total_lines = len(lines)
+    content_lines = [l for l in lines if l.strip() and not l.strip().startswith("#")]
+
+    # MH-1: Line count > 200
+    if total_lines > 200:
+        warnings.append(
+            f"MEMORY.md가 200줄을 초과 ({total_lines}줄). "
+            "200줄 이후는 truncate됩니다. 정리를 권장합니다."
+        )
+
+    # MH-2: Duplicate headers
+    headers = _MEMORY_HEADER_RE.findall(content)
+    header_texts = [text.strip() for _, text in headers]
+    seen = {}
+    for ht in header_texts:
+        seen[ht] = seen.get(ht, 0) + 1
+    duplicates = [ht for ht, count in seen.items() if count > 1]
+    if duplicates:
+        warnings.append(
+            f"중복 섹션 감지: {', '.join(duplicates[:3])}. 통합을 권장합니다."
+        )
+
+    # MH-3: Empty sections (## followed by ## with no content between)
+    empty_sections = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            # Look ahead for next non-empty line
+            for j in range(i + 1, min(i + 5, len(lines))):
+                next_stripped = lines[j].strip()
+                if not next_stripped:
+                    continue
+                if next_stripped.startswith("## ") or next_stripped.startswith("# "):
+                    empty_sections.append(stripped)
+                break
+    if empty_sections:
+        warnings.append(
+            f"빈 섹션: {', '.join(s[:40] for s in empty_sections[:3])}. "
+            "내용 추가 또는 섹션 삭제를 권장합니다."
+        )
+
+    # MH-4: Nearly empty file
+    if len(content_lines) < 3 and total_lines > 0:
+        warnings.append(
+            "MEMORY.md가 거의 비어 있습니다. "
+            "핵심 사실과 사용자 선호도를 기록하세요."
+        )
+
+    return warnings
+
+
+def _find_memory_md(project_dir):
+    """Locate the auto memory MEMORY.md file for this project.
+
+    Convention: ~/.claude-*/projects/{project-hash}/memory/MEMORY.md
+    The project hash is derived from the absolute project path.
+    """
+    if not project_dir:
+        return None
+
+    home = os.path.expanduser("~")
+    abs_project = os.path.abspath(project_dir)
+
+    # Search for claude insight directories
+    try:
+        for entry in os.listdir(home):
+            if entry.startswith(".claude-") and os.path.isdir(os.path.join(home, entry)):
+                projects_dir = os.path.join(home, entry, "projects")
+                if not os.path.isdir(projects_dir):
+                    continue
+                # Project hash: path with / replaced by -
+                project_hash = abs_project.replace("/", "-")
+                memory_path = os.path.join(
+                    projects_dir, project_hash, "memory", "MEMORY.md"
+                )
+                if os.path.exists(memory_path):
+                    return memory_path
+    except Exception:
+        pass
+
+    return None
+
+
+# =============================================================================
+# Today/Yesterday Session Summary (Improvement B — deterministic, P1 compliant)
+# =============================================================================
+
+def _get_today_yesterday_summary(ki_path):
+    """Aggregate today's and yesterday's sessions from knowledge-index.jsonl.
+
+    P1 Compliance: All operations are deterministic (timestamp string comparison,
+    counting, set operations). Zero LLM inference.
+
+    Returns: list of summary strings (empty if no sessions today/yesterday).
+    """
+    if not ki_path or not os.path.exists(ki_path):
+        return []
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = datetime.fromtimestamp(
+        datetime.now().timestamp() - 86400
+    ).strftime("%Y-%m-%d")
+
+    today_sessions = []
+    yesterday_sessions = []
+
+    try:
+        with open(ki_path, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    entry = json.loads(stripped)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                ts = entry.get("timestamp", "")
+                if ts.startswith(today):
+                    today_sessions.append(entry)
+                elif ts.startswith(yesterday):
+                    yesterday_sessions.append(entry)
+    except Exception:
+        return []
+
+    summaries = []
+
+    if today_sessions:
+        n_sessions = len(today_sessions)
+        all_files = set()
+        for s in today_sessions:
+            for f in s.get("modified_files", []):
+                all_files.add(os.path.basename(f) if f else "")
+        all_files.discard("")
+        n_files = len(all_files)
+        first_task = (today_sessions[0].get("user_task", "") or "")[:80]
+        summaries.append(
+            f"오늘 작업: {n_sessions}개 세션, {n_files}개 파일 수정"
+            + (f" | 첫 작업: {first_task}" if first_task else "")
+        )
+
+    if yesterday_sessions:
+        n_sessions = len(yesterday_sessions)
+        all_files = set()
+        for s in yesterday_sessions:
+            for f in s.get("modified_files", []):
+                all_files.add(os.path.basename(f) if f else "")
+        all_files.discard("")
+        n_files = len(all_files)
+        summaries.append(
+            f"어제 작업: {n_sessions}개 세션, {n_files}개 파일 수정"
+        )
+
+    return summaries
+
+
+# =============================================================================
+# Phase 1-A: Thesis Continuity Markers
+# =============================================================================
+# Uses _extract_thesis_continuity() imported from _context_lib.py (DRY — no duplication).
+# Both SessionStart (live display) and save_context (KI archival) use the same function.
+
+
+# =============================================================================
+# Phase 1-C: Quality Gate Trend (pass/fail history from knowledge-index)
+# =============================================================================
+
+def _get_quality_gate_trend(ki_path, max_sessions=10):
+    """Extract quality gate pass/fail trend from recent knowledge-index sessions.
+
+    Scans thesis_continuity.pending_gates across recent sessions to detect
+    patterns like repeated gate failures (indicates systematic quality issues).
+
+    P1 Compliance: Deterministic JSON extraction + counting.
+    Returns: summary string or empty string.
+    """
+    if not ki_path or not os.path.exists(ki_path):
+        return ""
+    try:
+        entries = []
+        with open(ki_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+        # Scan recent sessions with thesis_continuity data
+        gate_history = {}  # gate_name → list of statuses ("pending" or "pass")
+        recent = entries[-max_sessions:] if entries else []
+        sessions_with_data = 0
+        for sess in recent:
+            tc = sess.get("thesis_continuity", {})
+            if not tc:
+                continue
+            sessions_with_data += 1
+            pending = set(tc.get("pending_gates", []))
+            # Any gate mentioned as pending is "fail/pending" in that session
+            for g in pending:
+                gate_history.setdefault(g, []).append("pending")
+
+        if sessions_with_data < 2:
+            return ""
+
+        # Detect repeated failures (same gate pending in 3+ consecutive sessions)
+        repeated_failures = []
+        for gate, statuses in gate_history.items():
+            if len(statuses) >= 3:
+                repeated_failures.append(f"{gate} ({len(statuses)}x pending)")
+
+        if repeated_failures:
+            return f"Repeated gate failures: {', '.join(repeated_failures)} — consider root cause analysis"
+        elif gate_history:
+            total_pending = sum(len(v) for v in gate_history.values())
+            return f"{total_pending} gate-pending events across {sessions_with_data} sessions"
+        return ""
+    except Exception:
+        return ""
+
+
 def _build_recovery_output(source, latest_path, summary, sot_warning, snapshot_age, fallback_note="", project_dir=None, snapshot_content="", risk_data=None):
     """Build the RLM-style recovery output for SessionStart injection."""
     age_str = _format_age(snapshot_age)
@@ -705,6 +962,41 @@ def _build_recovery_output(source, latest_path, summary, sot_warning, snapshot_a
                     f"  ⚠ {rf} — score:{score:.1f}, errors:{ec} ({types_str}), "
                     f"resolution:{rr:.0%}"
                 )
+
+    # Phase 1-A: Thesis continuity markers (pending gates + blocked steps)
+    thesis_continuity = _extract_thesis_continuity(project_dir)
+    if thesis_continuity:
+        output_lines.append("")
+        output_lines.append("■ THESIS CONTINUITY:")
+        pg = thesis_continuity.get("pending_gates", [])
+        if pg:
+            output_lines.append(f"  Pending gates: {', '.join(pg)}")
+        bs = thesis_continuity.get("blocked_steps", [])
+        if bs:
+            output_lines.append(f"  Blocked steps: {', '.join(bs)}")
+
+    # Phase 1-C: Quality gate trend (pass/fail history from knowledge-index)
+    if os.path.exists(ki_path) if has_archive else False:
+        gate_trend = _get_quality_gate_trend(ki_path)
+        if gate_trend:
+            output_lines.append("")
+            output_lines.append(f"■ Quality Gate Trend: {gate_trend}")
+
+    # MEMORY.md Health Check (deterministic — P1 compliant)
+    memory_warnings = _check_memory_health(project_dir)
+    if memory_warnings:
+        output_lines.append("")
+        output_lines.append("■ MEMORY.md 건강 검진:")
+        for mw in memory_warnings:
+            output_lines.append(f"  ⚠ {mw}")
+
+    # Today/Yesterday Session Summary (deterministic — P1 compliant)
+    if os.path.exists(ki_path) if has_archive else False:
+        day_summary = _get_today_yesterday_summary(ki_path)
+        if day_summary:
+            output_lines.append("")
+            for ds in day_summary:
+                output_lines.append(f"■ {ds}")
 
     # Instruction for Claude
     output_lines.extend([

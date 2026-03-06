@@ -155,11 +155,21 @@ python3 .claude/hooks/scripts/fallback_controller.py \
      4. Verdict: explicit **Verdict: PASS** or **Verdict: FAIL**
    - L2 Enhanced steps: Gate steps, Phase 2 final review, Phase 3 review cycles (152, 154), Phase 4 final check
    - Non-L2 steps: Skip this sub-step
-6. Call `@translator` for Korean pair (if Translation step) → Record:
-   ```bash
-   python3 .claude/hooks/scripts/checklist_manager.py --record-translation \
-     --project-dir {dir} --step {N} --ko-path {ko_file_path}
-   ```
+6. Call `@translator` for Korean pair (if Translation step):
+   a. @translator produces `.ko.md` file
+   b. Run deterministic T10-T12 checks:
+      ```bash
+      python3 .claude/hooks/scripts/verify_translation_terms.py \
+        --en-file {en_output_path} --ko-file {ko_file_path} \
+        --glossary translations/glossary.yaml
+      ```
+   c. If T10-T12 FAIL: re-translate the failing terms (non-blocking, but quality matters)
+   d. For Gate steps and Phase 2-3 final outputs: call `@translation-verifier` for Layer 2 semantic review
+   e. Record:
+      ```bash
+      python3 .claude/hooks/scripts/checklist_manager.py --record-translation \
+        --project-dir {dir} --step {N} --ko-path {ko_file_path}
+      ```
 7. Record output in SOT:
    ```bash
    python3 .claude/hooks/scripts/checklist_manager.py --record-output \
@@ -357,8 +367,15 @@ After each English output is complete and validated:
 
 1. Call @translator sub-agent with the English output file
 2. @translator follows its 7-step protocol (glossary → translate → self-review → update glossary → write .ko.md)
-3. Run `validate_translation.py --step {N}` for P1 validation
-4. Record translation in SOT: `step-N-ko`
+3. Run `validate_translation.py --step {N}` for P1 structural validation (T1-T9)
+4. Run `verify_translation_terms.py --en-file {en} --ko-file {ko} --glossary translations/glossary.yaml` for P1 content preservation (T10-T12)
+5. For high-importance steps (Gate steps, Phase 2-3 outputs): call `@translation-verifier` for Layer 2 semantic review
+6. Record translation in SOT: `step-N-ko`
+
+**Translation Quality Architecture (3-Layer)**:
+- Layer 0: @translator self-review (built-in pACS)
+- Layer 1: Python deterministic checks — T1-T9 (structure) + T10-T12 (content)
+- Layer 2: @translation-verifier semantic review (high-importance steps only)
 
 **Translation is a Sub-agent, not a Team**: Glossary consistency requires sequential processing by a single translator with accumulated memory (ADR-051 decision).
 

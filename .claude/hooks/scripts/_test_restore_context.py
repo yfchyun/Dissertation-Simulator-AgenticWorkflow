@@ -11,6 +11,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -421,6 +422,160 @@ class TestExtractQuarterlyInsights(unittest.TestCase):
         result = rc._extract_quarterly_insights(self.qa_path)
         # Should show aggregated count of 10 syntax errors
         self.assertTrue(any("syntax(10)" in r for r in result))
+
+
+class TestCheckMemoryHealth(unittest.TestCase):
+    """Test Improvement A: MEMORY.md health check."""
+
+    def test_healthy_memory_returns_empty(self):
+        """A well-formed MEMORY.md should produce no warnings."""
+        tmpdir = Path(tempfile.mkdtemp())
+        try:
+            # Create a fake MEMORY.md with valid content
+            memory_dir = tmpdir / "memory"
+            memory_dir.mkdir()
+            memory_path = memory_dir / "MEMORY.md"
+            memory_path.write_text(
+                "# Project Memory\n\n"
+                "## Preferences\n\n"
+                "- Use English for workflow\n"
+                "- Korean for communication\n"
+                "- Always run tests\n\n"
+                "## Architecture\n\n"
+                "- Hook-based context preservation\n"
+                "- SOT pattern with state.yaml\n",
+                encoding="utf-8",
+            )
+            # _check_memory_health uses _find_memory_md which scans ~/.claude-*/
+            # We test the core logic directly by monkeypatching _find_memory_md
+            original = rc._find_memory_md
+            rc._find_memory_md = lambda _: str(memory_path)
+            try:
+                warnings = rc._check_memory_health(str(tmpdir))
+                self.assertEqual(warnings, [])
+            finally:
+                rc._find_memory_md = original
+        finally:
+            shutil.rmtree(tmpdir)
+
+    def test_mh1_line_count_exceeds_200(self):
+        """MH-1: Files > 200 lines should trigger a warning."""
+        tmpdir = Path(tempfile.mkdtemp())
+        try:
+            memory_path = tmpdir / "MEMORY.md"
+            lines = ["# Memory\n"] + [f"Line {i}\n" for i in range(210)]
+            memory_path.write_text("".join(lines), encoding="utf-8")
+            original = rc._find_memory_md
+            rc._find_memory_md = lambda _: str(memory_path)
+            try:
+                warnings = rc._check_memory_health(str(tmpdir))
+                self.assertTrue(any("200줄" in w for w in warnings))
+            finally:
+                rc._find_memory_md = original
+        finally:
+            shutil.rmtree(tmpdir)
+
+    def test_mh2_duplicate_headers(self):
+        """MH-2: Duplicate ## headers should trigger a warning."""
+        tmpdir = Path(tempfile.mkdtemp())
+        try:
+            memory_path = tmpdir / "MEMORY.md"
+            memory_path.write_text(
+                "# Memory\n\n"
+                "## Preferences\n\nSome content\n\n"
+                "## Architecture\n\nMore content\n\n"
+                "## Preferences\n\nDuplicate!\n",
+                encoding="utf-8",
+            )
+            original = rc._find_memory_md
+            rc._find_memory_md = lambda _: str(memory_path)
+            try:
+                warnings = rc._check_memory_health(str(tmpdir))
+                self.assertTrue(any("중복 섹션" in w for w in warnings))
+                self.assertTrue(any("Preferences" in w for w in warnings))
+            finally:
+                rc._find_memory_md = original
+        finally:
+            shutil.rmtree(tmpdir)
+
+    def test_mh3_empty_sections(self):
+        """MH-3: Empty sections (## followed by ##) should trigger a warning."""
+        tmpdir = Path(tempfile.mkdtemp())
+        try:
+            memory_path = tmpdir / "MEMORY.md"
+            memory_path.write_text(
+                "# Memory\n\n"
+                "## Filled Section\n\nContent here\n\n"
+                "## Empty Section\n\n"
+                "## Another Section\n\nContent\n",
+                encoding="utf-8",
+            )
+            original = rc._find_memory_md
+            rc._find_memory_md = lambda _: str(memory_path)
+            try:
+                warnings = rc._check_memory_health(str(tmpdir))
+                self.assertTrue(any("빈 섹션" in w for w in warnings))
+            finally:
+                rc._find_memory_md = original
+        finally:
+            shutil.rmtree(tmpdir)
+
+    def test_no_memory_returns_empty(self):
+        """No MEMORY.md found → no warnings (graceful)."""
+        original = rc._find_memory_md
+        rc._find_memory_md = lambda _: None
+        try:
+            warnings = rc._check_memory_health("/nonexistent")
+            self.assertEqual(warnings, [])
+        finally:
+            rc._find_memory_md = original
+
+
+class TestGetTodayYesterdaySummary(unittest.TestCase):
+    """Test Improvement B: Today/Yesterday session summary."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.ki_path = str(self.tmpdir / "knowledge-index.jsonl")
+        self.today = datetime.now().strftime("%Y-%m-%d")
+        self.yesterday = datetime.fromtimestamp(
+            datetime.now().timestamp() - 86400
+        ).strftime("%Y-%m-%d")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def _write_ki(self, entries):
+        with open(self.ki_path, "w", encoding="utf-8") as f:
+            for entry in entries:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def test_today_sessions_counted(self):
+        """Today's sessions should be aggregated correctly."""
+        self._write_ki([
+            {"timestamp": f"{self.today}T10:00:00", "user_task": "task A",
+             "modified_files": ["/a/foo.py", "/a/bar.py"]},
+            {"timestamp": f"{self.today}T14:00:00", "user_task": "task B",
+             "modified_files": ["/a/foo.py", "/a/baz.py"]},
+        ])
+        result = rc._get_today_yesterday_summary(self.ki_path)
+        self.assertTrue(any("오늘 작업" in s for s in result))
+        self.assertTrue(any("2개 세션" in s for s in result))
+        self.assertTrue(any("3개 파일" in s for s in result))  # foo, bar, baz
+
+    def test_yesterday_sessions_counted(self):
+        """Yesterday's sessions should be aggregated."""
+        self._write_ki([
+            {"timestamp": f"{self.yesterday}T10:00:00", "user_task": "old task",
+             "modified_files": ["/a/old.py"]},
+        ])
+        result = rc._get_today_yesterday_summary(self.ki_path)
+        self.assertTrue(any("어제 작업" in s for s in result))
+
+    def test_nonexistent_returns_empty(self):
+        """Non-existent ki_path should return empty list."""
+        result = rc._get_today_yesterday_summary("/nonexistent/path.jsonl")
+        self.assertEqual(result, [])
 
 
 if __name__ == "__main__":

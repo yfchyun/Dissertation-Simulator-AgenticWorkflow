@@ -629,5 +629,50 @@ class TestNoSystemSOTReference(unittest.TestCase):
                     )
 
 
+class TestTranslationProgress(unittest.TestCase):
+    """Test get_translation_progress() — translation coverage tracking."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.project_dir = self.tmpdir / "test-thesis"
+        cm.init_project(self.project_dir, "Test")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_no_outputs_returns_zero(self):
+        progress = cm.get_translation_progress(self.project_dir)
+        self.assertEqual(progress["total_en"], 0)
+        self.assertEqual(progress["translated"], 0)
+        self.assertEqual(progress["coverage_pct"], 0.0)
+        self.assertEqual(progress["missing_steps"], [])
+
+    def test_en_only_shows_missing(self):
+        cm.record_output(self.project_dir, 1, "/path/step-1.md")
+        cm.record_output(self.project_dir, 2, "/path/step-2.md")
+        progress = cm.get_translation_progress(self.project_dir)
+        self.assertEqual(progress["total_en"], 2)
+        self.assertEqual(progress["translated"], 0)
+        self.assertEqual(progress["coverage_pct"], 0.0)
+        self.assertEqual(progress["missing_steps"], [1, 2])
+
+    def test_partial_coverage(self):
+        cm.record_output(self.project_dir, 1, "/path/step-1.md")
+        cm.record_output(self.project_dir, 2, "/path/step-2.md")
+        cm.record_translation(self.project_dir, 1, "/path/step-1.ko.md")
+        progress = cm.get_translation_progress(self.project_dir)
+        self.assertEqual(progress["total_en"], 2)
+        self.assertEqual(progress["translated"], 1)
+        self.assertEqual(progress["coverage_pct"], 50.0)
+        self.assertEqual(progress["missing_steps"], [2])
+
+    def test_full_coverage(self):
+        cm.record_output(self.project_dir, 1, "/path/step-1.md")
+        cm.record_translation(self.project_dir, 1, "/path/step-1.ko.md")
+        progress = cm.get_translation_progress(self.project_dir)
+        self.assertEqual(progress["coverage_pct"], 100.0)
+        self.assertEqual(progress["missing_steps"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

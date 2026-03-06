@@ -61,7 +61,7 @@
 | Verification Protocol | 각 단계 산출물의 기능적 목표 100% 달성 검증. Anti-Skip Guard(물리적) 위에 의미론적 Verification Gate 계층. 검증 기준은 Task 앞에 선언, 실패 시 최대 10회 재시도(ULW 활성 시 15회). `AGENTS.md §5.3` 참조 |
 | pACS (자체 신뢰 평가) | Verification Gate 통과 후 에이전트가 F/C/L 3차원 자기 평가. Pre-mortem Protocol 필수. min-score 원칙. GREEN(≥70): 자동 진행, YELLOW(50-69): 플래그 후 진행, RED(<50): 재작업. `AGENTS.md §5.4` 참조 |
 | Adversarial Review (Enhanced L2) | 기존 L2 Calibration을 대체하는 강화된 품질 검증. `@reviewer`(코드/산출물 비판적 분석, 읽기 전용) + `@fact-checker`(외부 사실 검증, 웹 접근). P1 검증(`validate_review.py`)으로 리뷰 품질 보장. `AGENTS.md §5.5` 참조 |
-| Translation Protocol | 영어 산출물 → 한국어 번역. `@translator` 서브에이전트가 `glossary.yaml` 기반 용어 일관성 유지. P1 검증(`validate_translation.py` T1-T9 + `validate_verification.py` V1a-V1c)으로 번역·검증 품질 보장. Review PASS가 Translation의 전제. `AGENTS.md §5.2` 참조 |
+| Translation Protocol | 영어 산출물 → 한국어 번역. 3-Layer 품질 보장: Layer 0(`@translator` 자기 검토) → Layer 1a(`validate_translation.py` T1-T9 구조) + Layer 1b(`verify_translation_terms.py` T10-T12 콘텐츠 보존) → Layer 2(`@translation-verifier` 의미론적 검증, 선택적). Review PASS가 Translation의 전제. `AGENTS.md §5.2` 참조 |
 | Predictive Debugging (L-1) | 에러 이력 기반 위험 파일 사전 경고. `predictive_debug_guard.py`(PreToolUse 경고 전용) + `aggregate_risk_scores()`(SessionStart P1 집계) + `validate_risk_scores()`(RS1-RS6 검증). `risk-scores.json` 캐시. `_context_lib.py` + `docs/protocols/context-preservation-detail.md` 참조 |
 | Abductive Diagnosis | 품질 게이트(Verification/pACS/Review) FAIL → 재시도 사이에 3단계 구조화된 진단 수행. Step A: P1 사전 증거 수집(`diagnose_context.py`), Step B: LLM 원인 분석(가설 ≥ 2개), Step C: P1 사후 검증(`validate_diagnosis.py` AD1-AD10). Fast-Path(FP1-FP3)로 결정론적 단축 가능. `diagnosis-logs/`에 기록. `AGENTS.md §5.6` 참조 |
 
@@ -73,8 +73,8 @@ AgenticWorkflow에는 210-step 박사 논문 연구 시뮬레이션 워크플로
 |---------------------|----------------|
 | 논문 SOT (`session.json`) | `thesis-output/[project]/session.json` — 시스템 SOT(`state.yaml`)와 독립. Gemini에서는 수동 관리 또는 Python 스크립트로 조작 |
 | Wave/Gate/HITL 아키텍처 | Gate(Wave 간 교차 검증)와 HITL(인간 승인)은 `checklist_manager.py` CLI로 구동. Gemini에서 직접 호출 가능 |
-| 48개 논문 전문 에이전트 | Gemini는 단일 세션 모델. 에이전트별 역할을 프롬프트로 명시하여 시뮬레이션 |
-| 25개 Slash Commands | `/thesis-init` 등은 Claude Code 전용. Gemini에서는 `checklist_manager.py --init` 등 CLI 직접 호출 |
+| 48개 논문 전문 에이전트 + 5개 기반 에이전트 | Gemini는 단일 세션 모델. 에이전트별 역할을 프롬프트로 명시하여 시뮬레이션 |
+| 26개 논문 Slash Commands | `/thesis-init` 등은 Claude Code 전용. Gemini에서는 `checklist_manager.py --init` 등 CLI 직접 호출 |
 | GroundedClaim 스키마 | `validate_grounded_claim.py`로 claim ID 검증. Gemini 출력도 동일 스키마 준수 필수 |
 | 3-tier Fallback | Team → Sub-agent → Direct. Gemini는 Direct 실행만 가능 |
 

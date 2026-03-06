@@ -927,6 +927,48 @@
 - **관련 파일**: `CLAUDE.md` (§절대 기준 3, §Hook 테이블, §프로젝트 구조), `AGENTS.md` (L123), `docs/protocols/code-change-protocol.md`, `.claude/settings.json`, `.claude/hooks/scripts/ccp_ripple_scanner.py` (신규), `.claude/hooks/scripts/_test_ccp_ripple_scanner.py` (신규)
 - **관련 ADR**: ADR-007 (CCP 원본), ADR-041 (CAP — 의미론적 검증 불가 선례), ADR-036 (Predictive Debugging — 동일 P1 패턴)
 
+### ADR-059: T10-T12 독립 스크립트 분리 + 번역 3-Layer 품질 아키텍처
+
+- **날짜**: 2026-03-06
+- **상태**: Accepted
+- **맥락**: 기존 번역 검증은 T1-T9 (`_context_lib.py` → `validate_translation.py`)로 구조적 검증만 수행. 용어집 준수(T10), 숫자 보존(T11), 인용 보존(T12)은 콘텐츠 수준 검증이 없어 번역 품질 보장에 갭이 존재. 또한 `@translator`의 self-review(Layer 0)와 Python 검증(Layer 1) 사이에 의미론적 검증(Layer 2)이 부재.
+- **결정**:
+  1. **`verify_translation_terms.py` 독립 스크립트 신규**: T10-T12를 `_context_lib.py`가 아닌 별도 파일로 구현
+  2. **`@translation-verifier` 서브에이전트 신규**: Layer 2 의미론적 번역 검증 (고중요도 단계 전용)
+  3. **`/thesis-translate` 슬래시 커맨드 신규**: 수동 번역 트리거 (7-step protocol)
+  4. **`get_translation_progress()` 함수**: `checklist_manager.py`에 번역 커버리지 추적 추가
+  5. **Orchestrator 파이프라인 연결**: `thesis-orchestrator.md` E5 step 6 및 Translation Integration 섹션에 T10-T12 + @translation-verifier 통합
+- **근거**:
+  - (1) `_context_lib.py`(6,677줄, 27 소비자)에 T10-T12를 추가하면 shotgun surgery 위험. T10-T12는 호출 컨텍스트(슬래시 커맨드, Orchestrator)가 T1-T9(Hook)과 다름
+  - (2) P1 원칙: T10-T12는 순수 regex/문자열 매칭 — 100% 결정론적, LLM 추론 0%
+  - (3) 3-Layer 분리: Layer 0(LLM self-review) + Layer 1(Python deterministic) + Layer 2(LLM semantic) — 각 계층이 다른 종류의 오류를 잡음
+- **대안**:
+  - `_context_lib.py`에 T10-T12 추가 → 기각 (27 소비자 파급 위험, ADR-056 선례)
+  - `validate_translation.py`에 T10-T12 추가 → 기각 (실행 컨텍스트 불일치: validate_translation은 Hook에서 호출, T10-T12는 슬래시 커맨드/Orchestrator에서 호출)
+- **파급 효과**: Additive-only. 기존 T1-T9 코드 수정 없음. 신규 4파일 + 기존 5파일 문서 동기화.
+- **관련 파일**: `verify_translation_terms.py`, `_test_verify_translation_terms.py`, `translation-verifier.md`, `thesis-translate.md`, `checklist_manager.py`, `thesis-orchestrator.md`, `quality-gates.md`, `CLAUDE.md`, `thesis-status.md`
+- **관련 ADR**: ADR-028 (@translator 설계), ADR-034 (Adversarial Review 패턴), ADR-024 (P1 할루시네이션 봉쇄)
+
+### ADR-060: Context Memory 품질 최적화 — Thesis Continuity + Session Type + Gate Trend
+
+- **날짜**: 2026-03-06
+- **상태**: Accepted
+- **맥락**: 컨텍스트 복원 시 thesis 워크플로우의 pending gates/blocked steps 정보가 누락되어 세션 재개 시 작업 방향 설정에 시간 소요. knowledge-index의 session_type 분류가 없어 과거 세션 검색 정밀도가 낮음. 반복적인 gate 실패 패턴을 조기에 감지하는 메커니즘 부재.
+- **결정**:
+  1. **Phase 1-A: Thesis Continuity Markers** — `_extract_thesis_continuity()`가 `thesis-output/{project}/session.json`을 순회하여 pending gates + blocked steps 추출. knowledge-index에 아카이브. SessionStart에서 실시간 표면화
+  2. **Phase 1-B: Session Type Classification** — `_classify_session_type()`가 7개 카테고리(debugging/feature/refactoring/audit/research/writing/translation)로 word-boundary regex 분류
+  3. **Phase 1-C: Quality Gate Trend** — `_get_quality_gate_trend()`가 최근 10개 세션의 gate pending 이력 집계, 3회 이상 반복 실패 시 root cause analysis 권고
+  4. **DRY 원칙**: `restore_context.py`가 `_context_lib.py`의 함수를 import (중복 제거)
+  5. **SOT 참조**: `_get_step_gate_deps()`가 `checklist_manager.STEP_DEPENDENCIES`를 동적 import (inline fallback 포함)
+- **근거**:
+  - P1 compliant: 모든 기능이 결정론적 Python (JSON 파싱, regex, 카운팅)
+  - SOT compliant: read-only — thesis SOT(`session.json`)를 수정하지 않음
+  - Additive-only: 기존 동작 변경 없음, knowledge-index에 키 추가만
+  - RLM 패턴 보존: knowledge-index에 포인터 저장, Claude가 Grep으로 탐색
+- **Critical Bug Fix**: 초기 구현에서 `thesis-output/session.json` (1레벨) 경로 사용 → 실제 구조 `thesis-output/{project}/session.json` (2레벨)로 수정. `generate_context_summary.py:224-225` 패턴 적용
+- **파급 효과**: `_context_lib.py` (함수 3개 추가), `restore_context.py` (함수 2개 추가 + import 확장), `CLAUDE.md` (CLI-only 스크립트 구분), `context-preservation-detail.md` (startup 제외 사유)
+- **관련 ADR**: ADR-017 (Error Taxonomy), ADR-020 (Knowledge Archive), ADR-036 (Predictive Debugging)
+
 ---
 
 ## 문서 관리
