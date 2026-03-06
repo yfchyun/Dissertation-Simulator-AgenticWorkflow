@@ -283,6 +283,7 @@ AgenticWorkflow/
 │   ├── hooks/scripts/         ← Context Preservation System + Setup Hooks + Safety Hooks
 │   │   ├── context_guard.py   (Hook 통합 디스패처 — 4개 이벤트의 단일 진입점)
 │   │   ├── _context_lib.py    (공유 라이브러리 — 파싱, 생성, SOT 캡처, Smart Throttling, Autopilot 상태 읽기·검증, ULW 감지·준수 검증, 절삭 상수 중앙화, sot_paths() 경로 통합, 다단계 전환 감지, 결정 품질 태그 정렬, Error Taxonomy 12패턴+Resolution 매칭, Success Patterns(Edit/Write→Bash 성공 시퀀스 추출), IMMORTAL-aware 압축+감사 추적, E5 Guard 중앙화(is_rich_snapshot+update_latest_with_guard), Knowledge Archive 통합(archive_and_index_session — 부분 실패 격리), 경로 태그 추출(extract_path_tags), KI 스키마 검증(_validate_session_facts — RLM 필수 키 보장), SOT 스키마 검증(validate_sot_schema — 워크플로우 state.yaml 구조 무결성 8항목 검증: S1-S6 기본 + S7 pacs 5필드(dimensions, current_step_score, weak_dimension, history, pre_mortem_flag) + S8 active_team 5필드(name, status(partial|all_completed), tasks_completed, tasks_pending, completed_summaries)), Adversarial Review P1 검증(validate_review_output R1-R5, parse_review_verdict, calculate_pacs_delta, validate_review_sequence), Translation P1 검증(validate_translation_output T1-T7, check_glossary_freshness T8, verify_pacs_arithmetic T9 범용, validate_verification_log V1a-V1c), Predictive Debugging P1(aggregate_risk_scores+validate_risk_scores RS1-RS6+_RISK_WEIGHTS 13개 가중치+_RECENCY_DECAY_DAYS 감쇠), pACS P1 검증(validate_pacs_output PA1-PA6 — pACS 로그 구조 무결성: 파일 존재·최소 크기·차원 점수·Pre-mortem·min() 산술·Color Zone), L0 Anti-Skip Guard(validate_step_output L0a-L0c — 산출물 파일 존재+최소 크기+비공백), Team Summaries KI 아카이브(_extract_team_summaries — SOT active_team.completed_summaries → KI 보존), Abductive Diagnosis Layer(diagnose_failure_context 사전 증거 수집 + validate_diagnosis_log AD1-AD10 사후 검증 + _extract_diagnosis_patterns KA 아카이빙 + Fast-Path FP1-FP3 + 가설 우선순위 H1/H2/H3), 모듈 레벨 regex 컴파일(9개+8개+8개+4개+5개 패턴 — 프로세스당 1회))
+│   │   ├── _claim_patterns.py (Claim ID 정규식 SOT — 47개 prefix 패턴 중앙화, 모든 claim 관련 스크립트가 import)
 │   │   ├── save_context.py    (저장 엔진)
 │   │   ├── restore_context.py (복원 — RLM 포인터 + 완료/Git 상태 + Predictive Debugging 위험 점수 캐시 생성)
 │   │   ├── update_work_log.py (작업 로그 누적 — 9개 도구 추적)
@@ -296,7 +297,7 @@ AgenticWorkflow/
 │   │   ├── output_secret_filter.py  (PostToolUse 시크릿 탐지 — 3-tier 추출(tool_response→file read→transcript), 25+ regex 패턴, 2-패스 스캔(raw+base64/URL), fcntl-locked 감사 로그, exit code 0 경고 전용)
 │   │   ├── security_sensitive_file_guard.py (PostToolUse 보안 민감 파일 경고 — .env/PEM/credentials/cloud/K8s/terraform 등 12 패턴, 세션 dedup, exit code 0 경고 전용)
 │   │   ├── diagnose_context.py  (Abductive Diagnosis 사전 증거 수집 — 품질 게이트 FAIL 시 증거 번들 생성, Orchestrator 수동 호출)
-│   │   ├── query_workflow.py    (워크플로우 관측성 — dashboard/weakest/retry/blocked 4모드, P1 SOT 스키마 검증 + context-aware pACS 추출)
+│   │   ├── query_workflow.py    (워크플로우 관측성 — dashboard/weakest/retry/blocked/error-trends 5모드, P1 SOT 스키마 검증 + context-aware pACS 추출 + cross-session 에러 트렌드)
 │   │   ├── validate_pacs.py    (pACS P1 검증 + L0 Anti-Skip Guard — PA1-PA7, 독립 실행 스크립트, JSON 출력)
 │   │   ├── validate_review.py (Adversarial Review P1 검증 — R1-R5, 독립 실행 스크립트, JSON 출력)
 │   │   ├── validate_translation.py (Translation P1 검증 — T1-T9 + glossary 검증, JSON 출력)
@@ -306,6 +307,12 @@ AgenticWorkflow/
 │   │   ├── validate_domain_knowledge.py (Domain Knowledge P1 검증 — DK1-DK7, JSON 출력)
 │   │   ├── validate_workflow.py (DNA 유전 P1 검증 — W1-W9, JSON 출력)
 │   │   ├── validate_retry_budget.py (Retry Budget P1 검증 — RB1-RB3 재시도 예산 판정(ULW-aware), JSON 출력)
+│   │   ├── build_bilingual_manifest.py (EN/KO 쌍 검증 — P1 결정론적 bilingual pair 완전성 검사)
+│   │   ├── check_format_consistency.py (챕터 간 서식 일관성 — P1 결정론적 인용·헤딩·리스트 포맷 검증)
+│   │   ├── detect_self_plagiarism.py (n-gram 자기표절 탐지 — P1 결정론적 챕터/wave 간 중복 검출)
+│   │   ├── extract_references.py    (인용 추출·정렬 — P1 결정론적 citation 수집·중복 제거)
+│   │   ├── format_grounded_claims.py (GroundedClaim YAML 포맷팅 — P1 결정론적 스키마 변환)
+│   │   ├── generate_thesis_outline.py (마크다운 기반 목차 추출 — P1 결정론적 헤딩 파싱)
 │   │   ├── _test_secret_filter.py   (output_secret_filter 테스트 — 44개)
 │   │   ├── _test_sensitive_file_guard.py (security_sensitive_file_guard 테스트 — 44개)
 │   │   ├── _test_block_destructive.py (block_destructive_commands 테스트 — 43개)
@@ -1294,9 +1301,18 @@ AGENTS.md의 절대 기준이 변경되면, 모든 Spoke 파일의 인라인 복
 | 스크립트 | 역할 |
 |---------|------|
 | `checklist_manager.py` | 논문 SOT CRUD (init/advance/gate/HITL/checkpoint/validate) |
-| `query_workflow.py` | 논문 관측성 (dashboard/weakest-step/blocked/retry) |
+| `query_workflow.py` | 논문 관측성 (dashboard/weakest-step/blocked/retry/error-trends) |
 | `validate_grounded_claim.py` | GroundedClaim ID·스키마 검증 |
 | `fallback_controller.py` | 3-tier Fallback 제어 |
+| `guard_sot_write.py` | 논문 SOT 쓰기 보호 (병렬 에이전트 충돌 방지) |
+| `compute_srcs_scores.py` | SRCS 4축 결정론적 점수 계산 |
+| `validate_wave_gate.py` | Wave/Gate 교차 검증 실행·기록 |
+| `validate_step_sequence.py` | 스텝 순서·의존성 검증 |
+| `validate_thesis_output.py` | 산출물 파일 존재·크기 검증 |
+| `validate_srcs_threshold.py` | SRCS 75점 임계값 검증 |
+| `validate_task_completion.py` | 태스크 완료 검증 (CLI-only, Orchestrator 호출) |
+| `teammate_health_check.py` | 에이전트 팀 건강 점검 |
+| `verify_translation_terms.py` | T10-T12 번역 콘텐츠 보존 검증 (P1) |
 
 ### 10.5 E2E 테스트
 

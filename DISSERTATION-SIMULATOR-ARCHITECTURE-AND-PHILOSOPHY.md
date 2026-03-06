@@ -277,7 +277,7 @@ Layer 2: Semantic Verification (선택적)
 | 스크립트 | 역할 | 카테고리 |
 |---------|------|---------|
 | `checklist_manager.py` | SOT CRUD, 체크리스트 관리, Gate/HITL 기록, Checkpoint | Core |
-| `query_workflow.py` | 관측성 — dashboard, weakest-step, blocked, retry | Observability |
+| `query_workflow.py` | 관측성 — dashboard, weakest-step, blocked, retry, error-trends | Observability |
 | `validate_grounded_claim.py` | GroundedClaim ID·스키마 검증, Hallucination Firewall | Quality |
 | `fallback_controller.py` | 3-tier Fallback 제어 (Team→Sub-agent→Direct) | Resilience |
 | `compute_srcs_scores.py` | SRCS 4축 결정론적 점수 계산 | Quality |
@@ -289,6 +289,12 @@ Layer 2: Semantic Verification (선택적)
 | `teammate_health_check.py` | 에이전트 팀 건강 점검 | Resilience |
 | `validate_task_completion.py` | 태스크 완료 검증 (CLI-only, Orchestrator 호출) | Integrity |
 | `verify_translation_terms.py` | T10-T12 번역 콘텐츠 보존 검증 (P1) | Quality |
+| `build_bilingual_manifest.py` | EN/KO 쌍 완전성 검증 (P1) | Quality |
+| `check_format_consistency.py` | 챕터 간 인용·헤딩·리스트 서식 일관성 (P1) | Quality |
+| `detect_self_plagiarism.py` | n-gram 기반 챕터/wave 간 자기표절 탐지 (P1) | Quality |
+| `extract_references.py` | 인용 추출·중복 제거·정렬 (P1) | Quality |
+| `format_grounded_claims.py` | GroundedClaim YAML 스키마 포맷팅 (P1) | Quality |
+| `generate_thesis_outline.py` | 마크다운 헤딩 기반 목차 추출 (P1) | Quality |
 
 ### 4.3 Context Memory 품질 최적화
 

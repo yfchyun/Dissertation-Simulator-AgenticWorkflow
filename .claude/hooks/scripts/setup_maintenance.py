@@ -81,6 +81,15 @@ REQUIRED_SCRIPTS = [
     "compute_srcs_scores.py",
     "fallback_controller.py",
     "validate_step_sequence.py",
+    # Thesis P1 deterministic utilities (Phase F)
+    "_claim_patterns.py",
+    "build_bilingual_manifest.py",
+    "check_format_consistency.py",
+    "detect_self_plagiarism.py",
+    "extract_references.py",
+    "format_grounded_claims.py",
+    "generate_thesis_outline.py",
+    "verify_translation_terms.py",
 ]
 
 # Severity levels
@@ -334,6 +343,10 @@ def _check_doc_code_sync(project_dir):
     DC-3: D-7 ULW detection pattern (validate_retry_budget.py ↔ _context_lib.py)
     DC-6: Hook configuration consistency (settings.json hook scripts ↔ CLAUDE.md Hook table)
     DC-7: English-First MANDATORY Hub-and-Spoke sync (AGENTS.md ↔ 5 Spoke files) — ADR-027a
+    DC-8: Script count verification (CLAUDE.md header count ↔ actual disk count)
+    DC-9: Bidirectional script list integrity (CLAUDE.md listed scripts ↔ actual disk scripts)
+    DC-10: Bidirectional script list integrity (AGENTS.md listed scripts ↔ actual disk scripts)
+    DC-11: Script count verification (AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md Mermaid ↔ actual disk count)
 
     Read-only: no SOT access, no RLM data mutation, no atomic_write calls.
     Returns list of _result() dicts (extends results, not appends single).
@@ -852,6 +865,262 @@ def _check_doc_code_sync(project_dir):
             INFO, "PASS", "Doc-code sync: DC-7",
             "English-First MANDATORY synchronized across Hub and Spokes",
         ))
+
+    # --- DC-8: Script count verification (CLAUDE.md header ↔ disk) ---
+    claude_md_path = os.path.join(project_dir, "CLAUDE.md")
+    if os.path.isfile(claude_md_path):
+        try:
+            with open(claude_md_path, "r", encoding="utf-8") as f:
+                claude_md = f.read()
+
+            # Extract count from "N개 프로덕션 + M개 모듈 + K개 테스트"
+            count_match = re.search(
+                r"(\d+)개 프로덕션 \+ (\d+)개 모듈 \+ (\d+)개 테스트",
+                claude_md,
+            )
+            if count_match:
+                doc_standalone = int(count_match.group(1))
+                doc_modules = int(count_match.group(2))
+                doc_tests = int(count_match.group(3))
+
+                # Count actual files on disk
+                all_py = [
+                    f for f in os.listdir(scripts_dir)
+                    if f.endswith(".py") and os.path.isfile(
+                        os.path.join(scripts_dir, f)
+                    )
+                ]
+                actual_tests = len([
+                    f for f in all_py if f.startswith("_test_")
+                ])
+                actual_modules = len([
+                    f for f in all_py
+                    if f.startswith("_") and not f.startswith("_test_")
+                ])
+                actual_standalone = len(all_py) - actual_tests - actual_modules
+
+                mismatches = []
+                if doc_standalone != actual_standalone:
+                    mismatches.append(
+                        f"standalone: doc={doc_standalone} disk={actual_standalone}"
+                    )
+                if doc_modules != actual_modules:
+                    mismatches.append(
+                        f"modules: doc={doc_modules} disk={actual_modules}"
+                    )
+                if doc_tests != actual_tests:
+                    mismatches.append(
+                        f"tests: doc={doc_tests} disk={actual_tests}"
+                    )
+
+                if mismatches:
+                    results.append(_result(
+                        WARNING, "WARN", "Doc-code sync: DC-8",
+                        f"CLAUDE.md script count mismatch: {'; '.join(mismatches)}",
+                    ))
+                else:
+                    results.append(_result(
+                        INFO, "PASS", "Doc-code sync: DC-8",
+                        f"Script counts match: {actual_standalone} standalone"
+                        f" + {actual_modules} modules + {actual_tests} tests",
+                    ))
+            else:
+                results.append(_result(
+                    WARNING, "WARN", "Doc-code sync: DC-8",
+                    "Could not parse script count pattern from CLAUDE.md",
+                ))
+        except OSError as e:
+            results.append(_result(
+                WARNING, "FAIL", "Doc-code sync: DC-8", f"read error: {e}"
+            ))
+
+    # --- DC-9: Bidirectional script list integrity (CLAUDE.md ↔ disk) ---
+    if os.path.isfile(claude_md_path):
+        try:
+            with open(claude_md_path, "r", encoding="utf-8") as f:
+                claude_md_text = f.read()
+
+            # Extract script names from hooks/scripts/ section only
+            # Boundary: starts at "hooks/scripts/", ends at "context-snapshots/"
+            section_match = re.search(
+                r"hooks/scripts/.*?\n(.*?)context-snapshots/",
+                claude_md_text,
+                re.DOTALL,
+            )
+            hooks_section = section_match.group(1) if section_match else ""
+            doc_scripts = set(re.findall(
+                r"[├└]── ([a-z0-9_]+\.py)\b", hooks_section
+            ))
+            # Exclude glob patterns like "_test_*.py"
+            doc_scripts = {s for s in doc_scripts if "*" not in s}
+
+            # Actual scripts on disk (exclude tests)
+            actual_scripts = {
+                f for f in os.listdir(scripts_dir)
+                if f.endswith(".py")
+                and not f.startswith("_test_")
+                and os.path.isfile(os.path.join(scripts_dir, f))
+            }
+
+            undocumented = sorted(actual_scripts - doc_scripts)
+            phantom = sorted(doc_scripts - actual_scripts)
+
+            dc9_ok = True
+            if undocumented:
+                dc9_ok = False
+                results.append(_result(
+                    WARNING, "WARN", "Doc-code sync: DC-9",
+                    f"Undocumented scripts (on disk, not in CLAUDE.md): "
+                    f"{', '.join(undocumented)}",
+                ))
+            if phantom:
+                dc9_ok = False
+                results.append(_result(
+                    WARNING, "WARN", "Doc-code sync: DC-9",
+                    f"Phantom scripts (in CLAUDE.md, not on disk — DANGEROUS): "
+                    f"{', '.join(phantom)}",
+                ))
+            if dc9_ok:
+                results.append(_result(
+                    INFO, "PASS", "Doc-code sync: DC-9",
+                    f"Bidirectional integrity OK: {len(actual_scripts)} scripts"
+                    f" match between disk and CLAUDE.md",
+                ))
+        except OSError as e:
+            results.append(_result(
+                WARNING, "FAIL", "Doc-code sync: DC-9", f"read error: {e}"
+            ))
+
+    # --- DC-10: Bidirectional script list integrity (AGENTS.md ↔ disk) ---
+    agents_md_path = os.path.join(project_dir, "AGENTS.md")
+    if os.path.isfile(agents_md_path):
+        try:
+            with open(agents_md_path, "r", encoding="utf-8") as f:
+                agents_md_text = f.read()
+
+            # Extract script names from hooks/scripts/ section only
+            # Boundary: starts at "hooks/scripts/", ends at "context-snapshots/"
+            agents_section_match = re.search(
+                r"hooks/scripts/.*?\n(.*?)context-snapshots/",
+                agents_md_text,
+                re.DOTALL,
+            )
+            agents_hooks_section = (
+                agents_section_match.group(1) if agents_section_match else ""
+            )
+            agents_doc_scripts = set(re.findall(
+                r"[├└]── ([a-z0-9_]+\.py)\b", agents_hooks_section
+            ))
+            # Also extract from §10.4 infrastructure table only
+            # Boundary: "핵심 인프라" heading ~ next "###" heading
+            infra_section_match = re.search(
+                r"핵심 인프라\s*\n(.*?)(?:\n###|\Z)",
+                agents_md_text,
+                re.DOTALL,
+            )
+            infra_section = (
+                infra_section_match.group(1) if infra_section_match else ""
+            )
+            agents_table_scripts = set(re.findall(
+                r"\|\s*`([a-z0-9_]+\.py)`\s*\|", infra_section
+            ))
+            agents_doc_scripts |= agents_table_scripts
+            agents_doc_scripts = {
+                s for s in agents_doc_scripts
+                if "*" not in s and not s.startswith("_test_")
+            }
+
+            # Actual scripts on disk (exclude tests) — reuse pattern
+            actual_scripts_for_agents = {
+                f for f in os.listdir(scripts_dir)
+                if f.endswith(".py")
+                and not f.startswith("_test_")
+                and os.path.isfile(os.path.join(scripts_dir, f))
+            }
+
+            agents_undocumented = sorted(
+                actual_scripts_for_agents - agents_doc_scripts
+            )
+            agents_phantom = sorted(
+                agents_doc_scripts - actual_scripts_for_agents
+            )
+
+            dc10_ok = True
+            if agents_undocumented:
+                dc10_ok = False
+                results.append(_result(
+                    WARNING, "WARN", "Doc-code sync: DC-10",
+                    f"Undocumented scripts (on disk, not in AGENTS.md): "
+                    f"{', '.join(agents_undocumented)}",
+                ))
+            if agents_phantom:
+                dc10_ok = False
+                results.append(_result(
+                    WARNING, "WARN", "Doc-code sync: DC-10",
+                    f"Phantom scripts (in AGENTS.md, not on disk — DANGEROUS): "
+                    f"{', '.join(agents_phantom)}",
+                ))
+            if dc10_ok:
+                results.append(_result(
+                    INFO, "PASS", "Doc-code sync: DC-10",
+                    f"Bidirectional integrity OK: {len(actual_scripts_for_agents)}"
+                    f" scripts match between disk and AGENTS.md",
+                ))
+        except OSError as e:
+            results.append(_result(
+                WARNING, "FAIL", "Doc-code sync: DC-10", f"read error: {e}"
+            ))
+
+    # --- DC-11: Script count in AW-ARCH Mermaid diagram ↔ disk ---
+    aw_arch_path = os.path.join(
+        project_dir, "AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md"
+    )
+    if os.path.isfile(aw_arch_path):
+        try:
+            with open(aw_arch_path, "r", encoding="utf-8") as f:
+                aw_arch_text = f.read()
+
+            # Extract count from Mermaid node: "N개 프로덕션"
+            aw_count_match = re.search(
+                r"(\d+)개 프로덕션", aw_arch_text
+            )
+            if aw_count_match:
+                aw_doc_count = int(aw_count_match.group(1))
+
+                # Count actual standalone scripts on disk
+                aw_all_py = [
+                    f for f in os.listdir(scripts_dir)
+                    if f.endswith(".py") and os.path.isfile(
+                        os.path.join(scripts_dir, f)
+                    )
+                ]
+                aw_actual_standalone = len([
+                    f for f in aw_all_py
+                    if not f.startswith("_test_")
+                    and not (f.startswith("_") and not f.startswith("_test_"))
+                ])
+
+                if aw_doc_count != aw_actual_standalone:
+                    results.append(_result(
+                        WARNING, "WARN", "Doc-code sync: DC-11",
+                        f"AW-ARCH Mermaid count mismatch: "
+                        f"doc={aw_doc_count} disk={aw_actual_standalone}",
+                    ))
+                else:
+                    results.append(_result(
+                        INFO, "PASS", "Doc-code sync: DC-11",
+                        f"AW-ARCH Mermaid count matches disk: "
+                        f"{aw_actual_standalone} standalone",
+                    ))
+            else:
+                results.append(_result(
+                    WARNING, "WARN", "Doc-code sync: DC-11",
+                    "Could not parse '개 프로덕션' pattern from AW-ARCH",
+                ))
+        except OSError as e:
+            results.append(_result(
+                WARNING, "FAIL", "Doc-code sync: DC-11", f"read error: {e}"
+            ))
 
     return results
 

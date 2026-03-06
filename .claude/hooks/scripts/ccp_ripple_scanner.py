@@ -94,6 +94,10 @@ HUB_SPOKE_MAP: Dict[str, Dict] = {
         "role": "Architecture document",
         "sync_targets": ["AGENTS.md", "CLAUDE.md"],
     },
+    "DISSERTATION-SIMULATOR-ARCHITECTURE-AND-PHILOSOPHY.md": {
+        "role": "Child system architecture document",
+        "sync_targets": ["AGENTS.md", "CLAUDE.md"],
+    },
     "AGENTICWORKFLOW-USER-MANUAL.md": {
         "role": "User manual",
         "sync_targets": ["AGENTS.md", "CLAUDE.md"],
@@ -130,6 +134,12 @@ D7_SYNC_PAIRS: Dict[str, List[str]] = {
     ],
     ".claude/hooks/scripts/setup_maintenance.py": [
         ".claude/hooks/scripts/setup_init.py",
+    ],
+    # Script listings duplicated across architecture documents
+    "DISSERTATION-SIMULATOR-ARCHITECTURE-AND-PHILOSOPHY.md": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md",
     ],
 }
 

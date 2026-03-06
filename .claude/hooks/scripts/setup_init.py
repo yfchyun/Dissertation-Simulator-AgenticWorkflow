@@ -78,6 +78,15 @@ REQUIRED_SCRIPTS = [
     "compute_srcs_scores.py",
     "fallback_controller.py",
     "validate_step_sequence.py",
+    # Thesis P1 deterministic utilities (Phase F)
+    "_claim_patterns.py",
+    "build_bilingual_manifest.py",
+    "check_format_consistency.py",
+    "detect_self_plagiarism.py",
+    "extract_references.py",
+    "format_grounded_claims.py",
+    "generate_thesis_outline.py",
+    "verify_translation_terms.py",
 ]
 
 # Severity levels

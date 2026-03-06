@@ -10,6 +10,7 @@ Usage:
     python3 .claude/hooks/scripts/query_workflow.py --project-dir . --weakest-step
     python3 .claude/hooks/scripts/query_workflow.py --project-dir . --retry-summary
     python3 .claude/hooks/scripts/query_workflow.py --project-dir . --blocked
+    python3 .claude/hooks/scripts/query_workflow.py --project-dir . --error-trends
 
 Output: JSON to stdout
 
@@ -18,6 +19,7 @@ Modes:
     --weakest-step   Step with lowest pACS score and its weak dimension
     --retry-summary  Retry budget usage across all gates
     --blocked        Identify what's blocking progress (failed gates, missing files)
+    --error-trends   Cross-session error pattern aggregation from knowledge-index.jsonl
 
 P1 Compliance: All data extraction is deterministic (regex + file-system checks).
     SOT schema validated via validate_sot_schema() before any query.
@@ -434,6 +436,118 @@ def _blocked(project_dir, sot):
 
 
 # ---------------------------------------------------------------------------
+# Error Trends (P1 — deterministic aggregation from knowledge-index.jsonl)
+# ---------------------------------------------------------------------------
+def _error_trends(project_dir):
+    """Aggregate error_patterns across sessions for cross-session trend analysis.
+
+    Reads knowledge-index.jsonl, extracts error_patterns from each session entry,
+    and produces frequency-ranked aggregation with deterministic sort order
+    (frequency desc → alphabetical asc for tie-breaking).
+
+    P1: No LLM inference — pure JSON parsing + counting.
+    SOT: Read-only — reads knowledge-index.jsonl only.
+    """
+    ki_path = os.path.join(
+        project_dir, ".claude", "context-snapshots", "knowledge-index.jsonl"
+    )
+    if not os.path.isfile(ki_path):
+        return {
+            "mode": "error_trends",
+            "error": "knowledge-index.jsonl not found",
+            "ki_path": ki_path,
+        }
+
+    totals = {}  # error_type -> count
+    resolved = {}  # error_type -> resolved_count
+    sessions_with_errors = 0
+    total_sessions = 0
+    recent_examples = {}  # error_type -> most recent session_id
+
+    try:
+        with open(ki_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                total_sessions += 1
+                error_patterns = entry.get("error_patterns")
+                if not error_patterns:
+                    continue
+
+                session_id = entry.get("session_id", "unknown")
+                has_errors = False
+
+                # Handle both list-of-dicts and dict formats
+                if isinstance(error_patterns, list):
+                    for ep in error_patterns:
+                        if not isinstance(ep, dict):
+                            continue
+                        error_type = ep.get("type", "unknown")
+                        has_errors = True
+                        totals[error_type] = totals.get(error_type, 0) + 1
+                        if ep.get("resolution"):
+                            resolved[error_type] = resolved.get(error_type, 0) + 1
+                        recent_examples[error_type] = session_id
+                elif isinstance(error_patterns, dict):
+                    for error_type, details in error_patterns.items():
+                        has_errors = True
+                        if isinstance(details, int):
+                            count = details
+                            res_count = 0
+                        elif isinstance(details, dict):
+                            count = details.get("count", 1)
+                            res_count = 1 if details.get("resolution") else 0
+                        else:
+                            continue
+                        totals[error_type] = totals.get(error_type, 0) + count
+                        resolved[error_type] = resolved.get(error_type, 0) + res_count
+                        recent_examples[error_type] = session_id
+
+                if has_errors:
+                    sessions_with_errors += 1
+
+    except OSError as e:
+        return {
+            "mode": "error_trends",
+            "error": f"Failed to read knowledge-index: {e}",
+            "ki_path": ki_path,
+        }
+
+    # Deterministic sort: frequency desc → alphabetical asc
+    sorted_trends = sorted(
+        totals.items(), key=lambda x: (-x[1], x[0])
+    )
+
+    trends = []
+    for error_type, count in sorted_trends:
+        res_count = resolved.get(error_type, 0)
+        trends.append({
+            "error_type": error_type,
+            "total_occurrences": count,
+            "resolved_count": res_count,
+            "resolution_rate": round(res_count / count, 2) if count > 0 else 0,
+            "last_session": recent_examples.get(error_type),
+        })
+
+    return {
+        "mode": "error_trends",
+        "total_sessions": total_sessions,
+        "sessions_with_errors": sessions_with_errors,
+        "error_rate": (
+            round(sessions_with_errors / total_sessions, 2)
+            if total_sessions > 0 else 0
+        ),
+        "trends": trends,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -443,9 +557,17 @@ def main():
     parser.add_argument("--weakest-step", action="store_true", help="Weakest pACS step")
     parser.add_argument("--retry-summary", action="store_true", help="Retry budget usage")
     parser.add_argument("--blocked", action="store_true", help="Progress blockers")
+    parser.add_argument("--error-trends", action="store_true", help="Cross-session error trends")
     args = parser.parse_args()
 
     project_dir = os.path.abspath(args.project_dir)
+
+    # --error-trends reads knowledge-index.jsonl, not SOT
+    if args.error_trends:
+        result = _error_trends(project_dir)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        sys.exit(0)
+
     sot, sot_path, sot_error = _find_sot(project_dir)
 
     if sot is None:

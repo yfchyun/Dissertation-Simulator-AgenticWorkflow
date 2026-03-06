@@ -969,6 +969,32 @@
 - **파급 효과**: `_context_lib.py` (함수 3개 추가), `restore_context.py` (함수 2개 추가 + import 확장), `CLAUDE.md` (CLI-only 스크립트 구분), `context-preservation-detail.md` (startup 제외 사유)
 - **관련 ADR**: ADR-017 (Error Taxonomy), ADR-020 (Knowledge Archive), ADR-036 (Predictive Debugging)
 
+### ADR-061: Doc-Code Sync P1 강화 (DC-8~DC-11) + Error Trends + CCP Scanner 확장
+
+- **날짜**: 2026-03-06
+- **상태**: Accepted
+- **맥락**: Harness engineering 인사이트 적용 과정에서, 스크립트 추가 시 문서 동기화를 LLM이 수동 수행하는 것이 할루시네이션 위험이 높다는 것이 **실증**됨 (6개 스크립트 추가 시 3개 문서 동기화 누락). DC-1~DC-7만으로는 CLAUDE.md 외 문서의 스크립트 목록 drift를 감지 불가. 또한 cross-session 에러 트렌드 분석 도구 부재.
+- **결정**:
+  1. **DC-8**: CLAUDE.md 스크립트 카운트 ↔ 디스크 실제 파일 수 비교 (P1)
+  2. **DC-9**: CLAUDE.md 스크립트 목록 ↔ 디스크 양방향 무결성 (undocumented + phantom 탐지, P1)
+  3. **DC-10**: AGENTS.md 스크립트 목록 ↔ 디스크 양방향 무결성 (§4 트리 + §10.4 인프라 테이블, P1)
+  4. **DC-11**: AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md Mermaid 다이어그램 카운트 ↔ 디스크 (P1)
+  5. **`--error-trends`**: `query_workflow.py`에 5번째 모드 추가 — knowledge-index.jsonl에서 cross-session 에러 패턴 집계 (결정론적 정렬: 빈도 desc → 알파벳 asc)
+  6. **CCP Scanner 확장**: `DISSERTATION-SIMULATOR-ARCHITECTURE-AND-PHILOSOPHY.md`를 HUB_SPOKE_MAP + D7_SYNC_PAIRS에 등록
+  7. **스크립트 목록 완전화**: CLAUDE.md, AGENTS.md, REQUIRED_SCRIPTS에 누락 8개 스크립트 추가 (6 standalone + _claim_patterns.py + verify_translation_terms.py)
+- **근거**:
+  - P1 원칙: DC-8~DC-11은 모두 Python regex + filesystem 비교 — 100% 결정론적
+  - 실증 기반 설계: "LLM이 문서 동기화를 놓친다"는 사실이 이 세션에서 직접 관찰됨
+  - DC-9/DC-10의 section boundary 제한으로 false positive 방지 (conftest.py 사례)
+  - `--error-trends`는 SOT-free (knowledge-index.jsonl만 읽음, SOT 접근 없음)
+- **대안**:
+  - DC-9만으로 CLAUDE.md 검증 → 기각 (AGENTS.md, AW-ARCH 문서 drift 미감지)
+  - DC-10 전체 문서 테이블 추출 → 기각 (E2E 테스트 파일 false phantom 위험)
+  - CCP scanner 미확장 → 기각 (DISS-ARCH 동기화 누락의 직접적 원인)
+- **파급 효과**: `setup_maintenance.py` (DC-8~DC-11 추가), `query_workflow.py` (--error-trends), `ccp_ripple_scanner.py` (HUB_SPOKE_MAP + D7_SYNC_PAIRS 확장), `setup_init.py` (REQUIRED_SCRIPTS D-7 동기화), CLAUDE.md/AGENTS.md/DISS-ARCH/AW-ARCH/context-preservation-detail.md (문서 동기화)
+- **관련 파일**: `setup_maintenance.py`, `setup_init.py`, `query_workflow.py`, `ccp_ripple_scanner.py`, `CLAUDE.md`, `AGENTS.md`, `AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md`, `DISSERTATION-SIMULATOR-ARCHITECTURE-AND-PHILOSOPHY.md`, `docs/protocols/context-preservation-detail.md`, `README.md`
+- **관련 ADR**: ADR-024 (P1 할루시네이션 봉쇄), ADR-042 (Hub-Spoke 맵), ADR-058 (CCP MANDATORY + P1 의존성 스캐너)
+
 ---
 
 ## 문서 관리

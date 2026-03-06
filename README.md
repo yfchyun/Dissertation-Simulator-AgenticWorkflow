@@ -74,7 +74,7 @@ Dissertation-Simulator-AgenticWorkflow/
 │  ── 부모 프레임워크 (AgenticWorkflow) 문서 ──
 ├── AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md    ← 프레임워크 설계 철학
 ├── AGENTICWORKFLOW-USER-MANUAL.md                    ← 프레임워크 사용법
-├── DECISION-LOG.md                                   ← 설계 결정 로그 (ADR-001~059)
+├── DECISION-LOG.md                                   ← 설계 결정 로그 (ADR-001~061)
 ├── soul.md                                           ← DNA 유전 철학
 │
 │  ── AI 에이전트 지시서 ──
@@ -92,7 +92,7 @@ Dissertation-Simulator-AgenticWorkflow/
 │   │   ├── synthesis-agent.md        (통합 합성)
 │   │   └── ... (48개 논문 전문 에이전트)
 │   ├── commands/              # 29개 Slash Commands (시스템 2 + 라우터 1 + 논문 26)
-│   ├── hooks/scripts/         # 65개 스크립트 (프로덕션 41 + 모듈 2 + 테스트 22)
+│   ├── hooks/scripts/         # 66개 스크립트 (프로덕션 42 + 모듈 2 + 테스트 22)
 │   │   ├── checklist_manager.py      (논문 SOT 관리)
 │   │   ├── query_workflow.py         (워크플로우 관측성)
 │   │   ├── validate_grounded_claim.py (claim 검증)
