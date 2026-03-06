@@ -4850,6 +4850,58 @@ def validate_verification_log(project_dir, step_number):
     return (is_valid, warnings)
 
 
+def generate_verification_log(step_number, criteria_results, overall=None):
+    """Generate a V1a-V1c compliant verification log (deterministic).
+
+    P1 Compliance: Pure string formatting — no LLM interpretation.
+    Called by Orchestrator at E5.3 to produce verification-logs/step-N-verify.md.
+
+    Args:
+        step_number: Step number (int).
+        criteria_results: List of dicts, each with keys:
+            - "criterion": str (e.g., "L0: Output exists and non-empty")
+            - "result": "PASS" or "FAIL"
+            - "evidence": str (e.g., "wave-results/wave-1/literature-search.md, 4523 bytes")
+        overall: "PASS" or "FAIL" or None (auto-derived: FAIL if any criterion FAIL).
+
+    Returns:
+        str: Complete markdown content for verification-logs/step-N-verify.md.
+    """
+    if not criteria_results:
+        criteria_results = []
+
+    # Auto-derive overall from criteria
+    if overall is None:
+        has_fail = any(
+            c.get("result", "").upper() == "FAIL" for c in criteria_results
+        )
+        overall = "FAIL" if has_fail else "PASS"
+
+    lines = [
+        f"# Verification Log — Step {step_number}",
+        "",
+        "## Criteria Results",
+        "",
+        "| Criterion | Result | Evidence |",
+        "|-----------|--------|----------|",
+    ]
+
+    for c in criteria_results:
+        criterion = c.get("criterion", "Unknown")
+        result = c.get("result", "UNKNOWN").upper()
+        evidence = c.get("evidence", "—")
+        # Escape pipe characters in values to prevent table breakage
+        criterion = criterion.replace("|", "\\|")
+        evidence = evidence.replace("|", "\\|")
+        lines.append(f"| {criterion} | {result} | {evidence} |")
+
+    lines.append("")
+    lines.append(f"## Overall Result: {overall}")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 # =============================================================================
 # Predictive Debugging: Risk Score Aggregation (P1 — Deterministic)
 # =============================================================================

@@ -15,6 +15,8 @@ import os
 import sys
 from pathlib import Path
 
+from _claim_patterns import extract_claim_ids  # noqa: E402
+
 # Expected output files per wave
 WAVE_OUTPUTS = {
     1: [
@@ -105,8 +107,7 @@ def validate_wave(project_dir: str, wave: int) -> dict:
         if expected_prefix:
             try:
                 content = filepath.read_text(encoding="utf-8")
-                import re
-                claim_ids = re.findall(r'id:\s*["\']?([A-Z]+-\d+)', content)
+                claim_ids = extract_claim_ids(content)
                 for cid in claim_ids:
                     prefix = cid.rsplit("-", 1)[0]
                     if prefix != expected_prefix:

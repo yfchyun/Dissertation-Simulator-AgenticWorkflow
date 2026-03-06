@@ -16,6 +16,8 @@ import re
 import sys
 from pathlib import Path
 
+from _claim_patterns import CLAIM_ID_VALIDATE_RE, extract_claim_ids  # noqa: E402
+
 # Thesis output directory pattern
 THESIS_OUTPUT_DIR = "thesis-output"
 WAVE_RESULTS_DIR = "wave-results"
@@ -57,10 +59,8 @@ REQUIRE_SOURCE_PATTERNS = [
     r"\bRR\s*=\s*[\d.]+",           # risk ratio
 ]
 
-# Claim ID pattern: PREFIX-NNN (1-4 uppercase letters, dash, 3 digits)
-# Also accepts sub-prefix format: PREFIX-SUBPREFIX-NNN or PREFIX-SUBPREFIXNNN
-# e.g., LS-001, TFA-012, VRA-H001, SA-TA001, FDA-PB001
-CLAIM_ID_PATTERN = re.compile(r"^[A-Z]{1,4}(?:-[A-Z]{1,4})?-?\d{3}$")
+# Claim ID validation — imported from _claim_patterns (centralized)
+CLAIM_ID_PATTERN = CLAIM_ID_VALIDATE_RE
 
 
 def is_wave_result_file(file_path: str, project_dir: str) -> bool:
@@ -107,8 +107,8 @@ def validate_claim_block(text: str) -> list[str]:
                     f"found without nearby citation."
                 )
 
-    # Check for claim ID format in YAML blocks
-    claim_ids = re.findall(r'id:\s*["\']?([A-Za-z]+(?:-[A-Za-z]+)*-?\d+)["\']?', text)
+    # Check for claim ID format in YAML blocks (centralized pattern)
+    claim_ids = extract_claim_ids(text)
     for cid in claim_ids:
         if not CLAIM_ID_PATTERN.match(cid):
             warnings.append(

@@ -43,26 +43,98 @@ class TestVerificationValidation(unittest.TestCase):
             f"| Output exists | PASS | File size: 2048 bytes |\n"
             f"| Min quality | PASS | Contains 5 GroundedClaims |\n"
             f"| Format valid | PASS | YAML schema validated |\n\n"
-            f"## Verdict: PASS\n"
+            f"## Overall Result: PASS\n"
         )
 
     def test_valid_verification_log(self):
+        from _context_lib import validate_verification_log
         self._write_verify_log(1, self._make_valid_verification())
-        result = vv.validate_verification_log(
-            str(self.verify_dir / "step-1-verify.md"))
-        self.assertTrue(result.get("valid", False) or result.get("v1a", False),
-                        f"Valid verification log should pass: {result}")
+        is_valid, warnings = validate_verification_log(str(self.tmpdir), 1)
+        self.assertTrue(is_valid, f"Valid verification log should pass: {warnings}")
 
     def test_missing_file(self):
-        result = vv.validate_verification_log(
-            str(self.verify_dir / "nonexistent.md"))
-        self.assertFalse(result.get("valid", True))
+        from _context_lib import validate_verification_log
+        is_valid, warnings = validate_verification_log(str(self.tmpdir), 999)
+        self.assertFalse(is_valid)
 
     def test_empty_file(self):
+        from _context_lib import validate_verification_log
         self._write_verify_log(1, "")
-        result = vv.validate_verification_log(
-            str(self.verify_dir / "step-1-verify.md"))
-        self.assertFalse(result.get("valid", True))
+        is_valid, warnings = validate_verification_log(str(self.tmpdir), 1)
+        self.assertFalse(is_valid)
+
+
+class TestGenerateVerificationLog(unittest.TestCase):
+    """Test that generate_verification_log() produces V1a-V1c compliant output."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.verify_dir = self.tmpdir / "verification-logs"
+        self.verify_dir.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_generated_log_passes_v1a_v1c(self):
+        """Generated log must pass validate_verification_log() (V1a-V1c)."""
+        from _context_lib import generate_verification_log, validate_verification_log
+
+        content = generate_verification_log(42, [
+            {"criterion": "L0: Output exists", "result": "PASS", "evidence": "file.md, 2048 bytes"},
+            {"criterion": "pACS above threshold", "result": "PASS", "evidence": "pACS = 75"},
+            {"criterion": "GroundedClaim compliance", "result": "PASS", "evidence": "12 claims"},
+        ])
+        path = self.verify_dir / "step-42-verify.md"
+        path.write_text(content, encoding="utf-8")
+
+        is_valid, warnings = validate_verification_log(str(self.tmpdir), 42)
+        self.assertTrue(is_valid, f"Generated log should pass V1a-V1c: {warnings}")
+
+    def test_auto_derives_fail(self):
+        """If any criterion is FAIL, overall must be FAIL."""
+        from _context_lib import generate_verification_log
+
+        content = generate_verification_log(10, [
+            {"criterion": "L0: Output exists", "result": "PASS", "evidence": "ok"},
+            {"criterion": "pACS threshold", "result": "FAIL", "evidence": "pACS = 38"},
+        ])
+        self.assertIn("## Overall Result: FAIL", content)
+
+    def test_auto_derives_pass(self):
+        """If all criteria PASS, overall must be PASS."""
+        from _context_lib import generate_verification_log
+
+        content = generate_verification_log(10, [
+            {"criterion": "L0: Output exists", "result": "PASS", "evidence": "ok"},
+        ])
+        self.assertIn("## Overall Result: PASS", content)
+
+    def test_minimum_size(self):
+        """Generated log must be at least 100 bytes (V1a size check)."""
+        from _context_lib import generate_verification_log
+
+        content = generate_verification_log(1, [
+            {"criterion": "Test", "result": "PASS", "evidence": "evidence text here"},
+        ])
+        self.assertGreaterEqual(len(content.encode("utf-8")), 100)
+
+    def test_pipe_escaping(self):
+        """Pipe characters in evidence must be escaped to prevent table breakage."""
+        from _context_lib import generate_verification_log
+
+        content = generate_verification_log(1, [
+            {"criterion": "Test", "result": "PASS", "evidence": "a|b|c"},
+        ])
+        self.assertNotIn("| a|b|c |", content)
+        self.assertIn("a\\|b\\|c", content)
+
+    def test_empty_criteria(self):
+        """Empty criteria list should produce valid markdown."""
+        from _context_lib import generate_verification_log
+
+        content = generate_verification_log(1, [])
+        self.assertIn("# Verification Log", content)
+        self.assertIn("## Overall Result: PASS", content)
 
 
 class TestNoSystemSOTReference(unittest.TestCase):

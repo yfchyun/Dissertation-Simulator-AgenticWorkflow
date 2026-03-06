@@ -19,6 +19,8 @@ import re
 import sys
 from pathlib import Path
 
+from _claim_patterns import count_claims as _count_claims  # noqa: E402
+
 # Scoring parameters
 MAX_CS_SCORE = 100
 MAX_VS_SCORE = 100
@@ -107,9 +109,8 @@ def compute_file_scores(file_path: str) -> dict:
 
     content = path.read_text(encoding="utf-8")
 
-    # Count claims
-    claim_ids = re.findall(r'id:\s*["\']?[A-Z]+-\d+', content)
-    claim_count = len(claim_ids)
+    # Count claims (centralized pattern from _claim_patterns)
+    claim_count = _count_claims(content)
 
     cs = compute_citation_score(content, claim_count)
     vs = compute_verifiability_score(content, claim_count)

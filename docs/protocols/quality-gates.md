@@ -104,7 +104,21 @@ SessionStart와 Stop hook 양쪽에서 실행.
 
 독립 실행 스크립트: `validate_domain_knowledge.py`. 선택적 — 모든 워크플로우가 필요로 하지 않음.
 
-### (14) Workflow.md DNA Inheritance P1 검증
+### (14) Gate Report Persistence (MANDATORY)
+
+Each Cross-Validation Gate MUST persist its validation result to disk:
+
+```bash
+python3 .claude/hooks/scripts/validate_wave_gate.py \
+  --project-dir {dir} --gate {gate-name} \
+  --output-json {dir}/gate-reports/{gate-name}-report.json
+```
+
+The `--output-json` flag writes the full validation result (status, gate, files_checked, total_claims, errors, warnings, file_results) to the specified path. The report path MUST be recorded in session.json via `record_gate_result(report_path=...)`.
+
+Gate retry reports use the naming convention: `gate-reports/{gate-name}-retry-{K}-report.json`.
+
+### (15) Workflow.md DNA Inheritance P1 검증
 `validate_workflow_md()` — 9항목:
 - W1: 파일 존재, W2: 최소 크기 500 bytes, W3: `## Inherited DNA` 헤더, W4: Inherited Patterns 테이블 ≥ 3행, W5: Constitutional Principles 섹션, W6: CAP 참조, W7: CT Verification-Validator 정합성, W8: DKS Verification-Validator 정합성, W9: English-First Execution 패턴 존재 (ADR-027a)
 

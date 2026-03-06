@@ -12,9 +12,10 @@ Usage:
 import argparse
 import json
 import os
-import re
 import sys
 from pathlib import Path
+
+from _claim_patterns import count_claims, extract_claim_ids  # noqa: E402
 
 # Gate definitions: which wave outputs to validate
 GATE_CONFIG = {
@@ -43,10 +44,10 @@ GATE_CONFIG = {
         "description": "SRCS Full Evaluation (Wave 4 → Wave 5)",
     },
     "final-quality": {
-        "wave": 5,
-        "min_claims_per_file": 1,
-        "min_files": 1,
-        "description": "Final Quality Gate (Wave 5 → HITL-2)",
+        "wave": 4,
+        "min_claims_per_file": 5,
+        "min_files": 2,
+        "description": "Final Quality Gate (All Waves → HITL-2)",
     },
 }
 
@@ -54,14 +55,7 @@ GATE_CONFIG = {
 MIN_OUTPUT_SIZE = 100
 
 
-def count_claims(content: str) -> int:
-    """Count GroundedClaim entries in a file."""
-    return len(re.findall(r'id:\s*["\']?[A-Z]+-\d+', content))
-
-
-def extract_claim_ids(content: str) -> list[str]:
-    """Extract claim IDs from content."""
-    return re.findall(r'id:\s*["\']?([A-Z]+-\d+)', content)
+# count_claims and extract_claim_ids imported from _claim_patterns
 
 
 def check_inconsistencies(all_claims: dict[str, list[str]]) -> list[str]:

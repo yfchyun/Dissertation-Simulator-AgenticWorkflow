@@ -160,7 +160,7 @@ class TestInitProject(unittest.TestCase):
         expected_dirs = [
             "wave-results/wave-1", "wave-results/wave-2", "wave-results/wave-3",
             "wave-results/wave-4", "wave-results/wave-5",
-            "gate-reports", "research-design", "thesis-drafts",
+            "gate-reports", "phase-2", "thesis-drafts",
             "submission-package", "verification-logs", "pacs-logs",
             "review-logs", "fallback-logs", "checkpoints", "user-resource",
         ]
@@ -481,6 +481,131 @@ class TestConstants(unittest.TestCase):
             all_steps.update(range(start, end + 1))
         self.assertEqual(min(all_steps), 1)
         self.assertEqual(max(all_steps), 180)
+
+
+class TestCLIRecordGate(unittest.TestCase):
+    """Test --record-gate CLI flag."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.project_dir = self.tmpdir / "thesis"
+        cm.init_project(self.project_dir, "Test")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_cli_record_gate_pass(self):
+        args = type("Args", (), {
+            "project_dir": str(self.project_dir),
+            "gate_name": "gate-1", "gate_status": "pass", "report_path": None,
+        })()
+        ret = cm._cli_record_gate(args)
+        self.assertEqual(ret, 0)
+        sot = cm.read_thesis_sot(self.project_dir)
+        self.assertEqual(sot["gates"]["gate-1"]["status"], "pass")
+
+    def test_cli_record_gate_with_report(self):
+        args = type("Args", (), {
+            "project_dir": str(self.project_dir),
+            "gate_name": "gate-1", "gate_status": "pass",
+            "report_path": "gate-reports/gate-1-report.json",
+        })()
+        ret = cm._cli_record_gate(args)
+        self.assertEqual(ret, 0)
+        sot = cm.read_thesis_sot(self.project_dir)
+        self.assertEqual(sot["gates"]["gate-1"]["report"], "gate-reports/gate-1-report.json")
+
+    def test_cli_record_gate_missing_name(self):
+        args = type("Args", (), {
+            "project_dir": str(self.project_dir),
+            "gate_name": None, "gate_status": "pass", "report_path": None,
+        })()
+        ret = cm._cli_record_gate(args)
+        self.assertEqual(ret, 1)
+
+    def test_cli_record_gate_missing_status(self):
+        args = type("Args", (), {
+            "project_dir": str(self.project_dir),
+            "gate_name": "gate-1", "gate_status": None, "report_path": None,
+        })()
+        ret = cm._cli_record_gate(args)
+        self.assertEqual(ret, 1)
+
+
+class TestCLIRecordOutput(unittest.TestCase):
+    """Test --record-output CLI flag."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.project_dir = self.tmpdir / "thesis"
+        cm.init_project(self.project_dir, "Test")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_cli_record_output(self):
+        args = type("Args", (), {
+            "project_dir": str(self.project_dir),
+            "step": 5, "output_path": "wave-results/wave-1/05-output.md",
+        })()
+        ret = cm._cli_record_output(args)
+        self.assertEqual(ret, 0)
+        sot = cm.read_thesis_sot(self.project_dir)
+        self.assertEqual(sot["outputs"]["step-5"], "wave-results/wave-1/05-output.md")
+
+    def test_cli_record_output_missing_step(self):
+        args = type("Args", (), {
+            "project_dir": str(self.project_dir),
+            "step": None, "output_path": "file.md",
+        })()
+        ret = cm._cli_record_output(args)
+        self.assertEqual(ret, 1)
+
+    def test_cli_record_output_missing_path(self):
+        args = type("Args", (), {
+            "project_dir": str(self.project_dir),
+            "step": 1, "output_path": None,
+        })()
+        ret = cm._cli_record_output(args)
+        self.assertEqual(ret, 1)
+
+
+class TestCLIRecordTranslation(unittest.TestCase):
+    """Test --record-translation CLI flag."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.project_dir = self.tmpdir / "thesis"
+        cm.init_project(self.project_dir, "Test")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_cli_record_translation(self):
+        args = type("Args", (), {
+            "project_dir": str(self.project_dir),
+            "step": 3, "ko_path": "wave-results/wave-1/03-output.ko.md",
+        })()
+        ret = cm._cli_record_translation(args)
+        self.assertEqual(ret, 0)
+        sot = cm.read_thesis_sot(self.project_dir)
+        self.assertEqual(sot["outputs"]["step-3-ko"], "wave-results/wave-1/03-output.ko.md")
+
+    def test_cli_record_translation_missing_step(self):
+        args = type("Args", (), {
+            "project_dir": str(self.project_dir),
+            "step": None, "ko_path": "file.ko.md",
+        })()
+        ret = cm._cli_record_translation(args)
+        self.assertEqual(ret, 1)
+
+    def test_cli_record_translation_missing_path(self):
+        args = type("Args", (), {
+            "project_dir": str(self.project_dir),
+            "step": 1, "ko_path": None,
+        })()
+        ret = cm._cli_record_translation(args)
+        self.assertEqual(ret, 1)
 
 
 class TestNoSystemSOTReference(unittest.TestCase):

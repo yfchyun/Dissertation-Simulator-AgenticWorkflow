@@ -652,7 +652,7 @@ def init_project(project_dir: Path, project_name: str, **kwargs) -> dict:
         "wave-results/wave-4",
         "wave-results/wave-5",
         "gate-reports",
-        "research-design",
+        "phase-2",
         "thesis-drafts",
         "submission-package",
         "verification-logs",
@@ -1285,6 +1285,9 @@ def main():
     group.add_argument("--record-hitl", help="Record HITL checkpoint completion (e.g., hitl-1)")
     group.add_argument("--update-team", action="store_true", help="Update active team fields")
     group.add_argument("--complete-team", action="store_true", help="Move active team to completed_teams")
+    group.add_argument("--record-gate", action="store_true", help="Record gate result in SOT")
+    group.add_argument("--record-output", action="store_true", help="Record step output path in SOT")
+    group.add_argument("--record-translation", action="store_true", help="Record translation output in SOT")
 
     parser.add_argument("--project-name", help="Project name (default: directory name)")
     parser.add_argument("--research-type", choices=sorted(VALID_RESEARCH_TYPES))
@@ -1298,6 +1301,11 @@ def main():
     parser.add_argument("--team-status", help="Team status (for --update-team)")
     parser.add_argument("--append-task", help="Task ID to append to pending (for --update-team)")
     parser.add_argument("--complete-task", help="Task ID to mark completed (for --update-team)")
+    parser.add_argument("--gate-name", help="Gate name (for --record-gate)")
+    parser.add_argument("--gate-status", choices=["pass", "fail"], help="Gate status (for --record-gate)")
+    parser.add_argument("--report-path", help="Path to gate report JSON (for --record-gate)")
+    parser.add_argument("--output-path", help="Output file path (for --record-output)")
+    parser.add_argument("--ko-path", help="Korean translation path (for --record-translation)")
 
     args = parser.parse_args()
 
@@ -1321,6 +1329,71 @@ def main():
         return _cli_update_team(args)
     elif args.complete_team:
         return _cli_complete_team(args)
+    elif args.record_gate:
+        return _cli_record_gate(args)
+    elif args.record_output:
+        return _cli_record_output(args)
+    elif args.record_translation:
+        return _cli_record_translation(args)
+
+
+def _cli_record_gate(args) -> int:
+    """CLI handler for --record-gate."""
+    if not args.gate_name:
+        print("ERROR: --record-gate requires --gate-name", file=sys.stderr)
+        return 1
+    if not args.gate_status:
+        print("ERROR: --record-gate requires --gate-status", file=sys.stderr)
+        return 1
+    try:
+        project_dir = Path(args.project_dir)
+        sot = record_gate_result(
+            project_dir, args.gate_name, args.gate_status, args.report_path
+        )
+        gate_entry = sot["gates"].get(args.gate_name, {})
+        print(json.dumps({"ok": True, "gate": args.gate_name, "entry": gate_entry}))
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+
+def _cli_record_output(args) -> int:
+    """CLI handler for --record-output."""
+    if args.step is None:
+        print("ERROR: --record-output requires --step N", file=sys.stderr)
+        return 1
+    if not args.output_path:
+        print("ERROR: --record-output requires --output-path", file=sys.stderr)
+        return 1
+    try:
+        project_dir = Path(args.project_dir)
+        sot = record_output(project_dir, args.step, args.output_path)
+        key = f"step-{args.step}"
+        print(json.dumps({"ok": True, "key": key, "path": sot["outputs"].get(key)}))
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+
+def _cli_record_translation(args) -> int:
+    """CLI handler for --record-translation."""
+    if args.step is None:
+        print("ERROR: --record-translation requires --step N", file=sys.stderr)
+        return 1
+    if not args.ko_path:
+        print("ERROR: --record-translation requires --ko-path", file=sys.stderr)
+        return 1
+    try:
+        project_dir = Path(args.project_dir)
+        sot = record_translation(project_dir, args.step, args.ko_path)
+        key = f"step-{args.step}-ko"
+        print(json.dumps({"ok": True, "key": key, "path": sot["outputs"].get(key)}))
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

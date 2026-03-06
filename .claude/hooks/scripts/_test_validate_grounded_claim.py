@@ -112,6 +112,20 @@ class TestClaimIdFormat(unittest.TestCase):
         result = run_hook("Write", "/project/thesis-output/test/wave-results/wave-1/test.md", content)
         self.assertEqual(result.returncode, 0)  # Warns but doesn't block
 
+    def test_multi_hyphen_claim_ids(self):
+        content = """
+- id: EMP-NEURO-001
+- id: CR-LOGIC-002
+- id: MC-IV-003
+"""
+        result = run_hook("Write", "/project/thesis-output/test/wave-results/wave-2/test.md", content)
+        self.assertEqual(result.returncode, 0)
+
+    def test_blockquote_claim_id(self):
+        content = '> **[PHIL-T001]** claim_id: PHIL-T001\n'
+        result = run_hook("Write", "/project/thesis-output/test/wave-results/wave-1/test.md", content)
+        self.assertEqual(result.returncode, 0)
+
 
 class TestNoSystemSOTReference(unittest.TestCase):
     """Ensure script does not reference system SOT filenames."""

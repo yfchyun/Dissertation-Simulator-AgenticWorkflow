@@ -99,11 +99,46 @@ python3 .claude/hooks/scripts/fallback_controller.py \
 
 **E5. Post-execution (all tiers):**
 1. Verify output file exists and is non-empty (L0 Anti-Skip)
-2. Run pACS self-rating (per `autopilot-execution.md`)
-3. Call `@translator` for Korean pair (if Translation step)
-4. Record output in SOT: `checklist_manager.py` record_output
-5. Advance step: `checklist_manager.py --advance --step {N}`
-6. At HITL points: `checklist_manager.py --save-checkpoint`
+2. Run pACS self-rating (per `autopilot-execution.md`) → Write to `pacs-logs/step-{N}-pacs.md`
+3. **Write Verification Log** → `verification-logs/step-{N}-verify.md`
+   - Use the **P1 deterministic helper** to generate the log (prevents format errors):
+   ```bash
+   python3 -c "
+   import sys; sys.path.insert(0, '.claude/hooks/scripts')
+   from _context_lib import generate_verification_log
+   log = generate_verification_log({N}, [
+       {'criterion': 'L0: Output exists and non-empty', 'result': 'PASS', 'evidence': '{file_path}, {size} bytes'},
+       {'criterion': 'pACS score above threshold', 'result': 'PASS', 'evidence': 'pACS = {score} (threshold: 50)'},
+       {'criterion': 'GroundedClaim schema compliance', 'result': 'PASS', 'evidence': '{claim_count} claims validated'},
+   ])
+   print(log)
+   "
+   ```
+   - Write the output to `verification-logs/step-{N}-verify.md`
+   - The helper auto-derives Overall Result (FAIL if any criterion FAIL) and guarantees V1a-V1c compliant format
+4. **Invoke @reviewer and persist report** → `review-logs/step-{N}-review.md` (L2 Enhanced steps only)
+   - Call @reviewer sub-agent on the step's output file
+   - @reviewer returns its report via SendMessage (it has no Write tool)
+   - **You MUST Write the reviewer's report to** `review-logs/step-{N}-review.md`
+   - The report MUST include these 4 sections (required by R1-R5 validators):
+     1. Pre-mortem Analysis
+     2. Issues Found (table with Severity column: Critical/Warning/Suggestion, minimum 1 row)
+     3. Independent pACS Assessment (with F, C, L dimensions)
+     4. Verdict: explicit **Verdict: PASS** or **Verdict: FAIL**
+   - L2 Enhanced steps: Gate steps, Phase 2 final review, Phase 3 review cycles (152, 154), Phase 4 final check
+   - Non-L2 steps: Skip this sub-step
+5. Call `@translator` for Korean pair (if Translation step) → Record:
+   ```bash
+   python3 .claude/hooks/scripts/checklist_manager.py --record-translation \
+     --project-dir {dir} --step {N} --ko-path {ko_file_path}
+   ```
+6. Record output in SOT:
+   ```bash
+   python3 .claude/hooks/scripts/checklist_manager.py --record-output \
+     --project-dir {dir} --step {N} --output-path {output_file_path}
+   ```
+7. Advance step: `checklist_manager.py --advance --project-dir {dir} --step {N}`
+8. At HITL points: `checklist_manager.py --save-checkpoint --project-dir {dir} --checkpoint {name}`
 
 ### Agent Team Lifecycle (Tier 1)
 
@@ -206,9 +241,20 @@ Agent(subagent_type="literature-searcher",
 ### Gate Execution
 
 At each Cross-Validation Gate:
-1. Run `validate_wave_gate.py` on wave outputs
-2. If PASS: record in SOT, proceed to next wave
-3. If FAIL: identify weak areas, re-run failing agents, retry gate (max 3 retries)
+1. Run `validate_wave_gate.py` on wave outputs **with `--output-json` to persist the gate report**:
+```bash
+python3 .claude/hooks/scripts/validate_wave_gate.py \
+  --project-dir {dir} --gate {gate-name} \
+  --output-json {dir}/gate-reports/{gate-name}-report.json
+```
+2. If PASS: record in SOT via CLI:
+   ```bash
+   python3 .claude/hooks/scripts/checklist_manager.py --record-gate \
+     --project-dir {dir} --gate-name {gate-name} --gate-status pass \
+     --report-path gate-reports/{gate-name}-report.json
+   ```
+   Proceed to next wave.
+3. If FAIL: identify weak areas, re-run failing agents, retry gate (max 3 retries). Each retry generates a new report: `gate-reports/{gate-name}-retry-{K}-report.json`.
 4. If 3 retries fail: escalate to user (HITL)
 
 ### HITL Checkpoints
@@ -303,6 +349,73 @@ When user asks for status or at milestone points, report in Korean:
 - HITL 체크포인트: {hitls}
 - 영어 산출물: {en_count}개
 - 한국어 번역: {ko_count}개
+```
+
+## Phase 3: Thesis Writing Protocol
+
+Phase 3 uses the `writing-team` (thesis-architect, thesis-writer, thesis-reviewer). Execute via E1-E5 loop with these phase-specific additions:
+
+### Draft Versioning
+
+Before each revision cycle, preserve the current version for audit trail:
+
+```
+Step 143-151 (Initial writing): Write chapters directly to phase-3/chapter-N.md (no backup needed)
+
+Step 152 (Internal review cycle 1):
+  1. Copy all phase-3/chapter-*.md → thesis-drafts/chapter-*_v1.md (pre-review backup)
+  2. Call @reviewer on each chapter → Write reports to review-logs/step-152-review.md
+  3. Standard E5 applies (verification-log, pACS, SOT update)
+
+Step 153 (Revision based on review 1):
+  1. Read review-logs/step-152-review.md for revision instructions
+  2. Apply revisions to phase-3/chapter-*.md (in-place edit)
+  3. Standard E5 applies
+
+Step 154 (Internal review cycle 2):
+  1. Copy all phase-3/chapter-*.md → thesis-drafts/chapter-*_v2.md (pre-review backup)
+  2. Call @reviewer on each chapter → Write reports to review-logs/step-154-review.md
+  3. Standard E5 applies
+
+Step 155 (Revision based on review 2):
+  1. Read review-logs/step-154-review.md
+  2. Apply revisions to phase-3/chapter-*.md (in-place edit)
+  3. Standard E5 applies
+
+Step 158 (Final revision):
+  1. Copy all phase-3/chapter-*.md → thesis-drafts/chapter-*_v3.md (final backup)
+  2. Apply any last revisions to phase-3/chapter-*.md
+```
+
+After Phase 3 completes: `phase-3/` holds the final version. `thesis-drafts/` holds v1, v2, v3 history.
+
+## Phase 4: Publication Strategy Protocol
+
+Phase 4 uses the `publish-team` (publication-strategist, journal-matcher, submission-preparer, cover-letter-writer). Execute via E1-E5 loop with these phase-specific additions:
+
+### Submission Package Generation
+
+```
+Step 165-166 (Journal identification & requirements):
+  → @publication-strategist, @journal-matcher
+  → Output: phase-4/publication-strategy.md
+
+Step 167 (Prepare submission package):
+  → @manuscript-formatter: Format thesis chapters for target journal style
+  → Write to: submission-package/manuscript-formatted.md
+
+Step 168 (Write cover letter):
+  → @cover-letter-writer: Generate journal-specific cover letter
+  → Write to: submission-package/cover-letter.md
+
+Step 169 (Format for target journal):
+  → @manuscript-formatter: Final formatting pass (citations, margins, structure)
+  → Update: submission-package/manuscript-formatted.md
+
+Step 172 (Generate final submission package):
+  → Compile submission manifest listing all deliverables:
+  → Write to: submission-package/submission-manifest.md
+  → Contents: manuscript, cover letter, references, supplementary materials checklist
 ```
 
 ## Error Handling

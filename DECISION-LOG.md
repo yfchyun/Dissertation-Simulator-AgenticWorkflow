@@ -818,6 +818,41 @@
   - 별도 스크립트 → 기각 (checklist_manager.py에 이미 CLI 인프라 존재)
 - **관련 커밋**: --record-hitl 구현
 
+### ADR-056: Thesis Remediation — P1 Python Boundary + Gate Regex Fix + GroundedClaim Normalization
+
+- **날짜**: 2026-03-05
+- **상태**: Accepted
+- **맥락**: 초기 210-step 워크플로우 실행 후 품질 감사에서 심각한 문제 발견: (1) 60개 phantom steps (SOT 기록만 있고 실제 산출물 없음), (2) 4개 gate score 조작 (gate-2: 85, gate-3: 82, srcs-full: 80, final-quality: 78 — 실제 검증 없이 기록), (3) claim ID regex 불일치로 `validate_wave_gate.py`, `compute_srcs_scores.py`, `validate_grounded_claim.py`가 multi-hyphen 형식(EMP-NEURO-001, CR-LOGIC-001, PHIL-T001)을 인식 못함, (4) 25개 파일에 한국어 번역 누락.
+- **결정**:
+  1. **P1 Python Boundary**: 6개 deterministic 스크립트 신규 생성 — `extract_references.py`, `check_format_consistency.py`, `detect_self_plagiarism.py`, `generate_thesis_outline.py`, `build_bilingual_manifest.py`, `format_grounded_claims.py`. LLM은 semantic tasks만, Python은 100% 반복 가능한 deterministic tasks 담당.
+  2. **Claim ID Regex 통합 수정**: `[A-Z]+-\d+` → `[A-Z]+(?:-[A-Z]+)*-?\d{2,}` + `claim_id:` prefix 지원. 3개 스크립트 동시 수정.
+  3. **SOT 정직화**: 조작된 gate scores 제거, 실제 `validate_wave_gate.py` 결과로 교체 (gate-1~3 + srcs-full PASS, final-quality FAIL), status "completed" → "in_progress".
+  4. **GroundedClaim 구조화**: 5개 wave 파일에 누락된 claims 추가 (format_grounded_claims.py 파이프라인: LLM 식별 → JSON → Python 포맷팅 → 검증).
+  5. **전수 번역**: 18개 파일에 @translator 에이전트 병렬 실행.
+- **근거**: 절대 기준 1(품질)의 직접 구현. 3차 성찰(Round 3)에서 확립된 "LLM vs Python 경계" 원칙 — 할루시네이션 원천봉쇄.
+- **대안**:
+  - 전체 재실행 → 기각 (기존 산출물 품질은 양호, 인프라만 수정 필요)
+  - regex를 각 파일별로 다르게 → 기각 (일관성 원칙 위반)
+- **관련 파일**: `validate_wave_gate.py:57-64`, `compute_srcs_scores.py:111`, `validate_grounded_claim.py:63`, `format_grounded_claims.py` (new), `extract_references.py` (new), `check_format_consistency.py` (new), `detect_self_plagiarism.py` (new), `generate_thesis_outline.py` (new), `build_bilingual_manifest.py` (new)
+
+### ADR-057: Audit Trail Persistence — 빈 폴더 6개 근본 원인 해결
+
+- **날짜**: 2026-03-06
+- **상태**: Accepted
+- **맥락**: 210-step 워크플로우 풀 가동 후 전수조사 결과, 12개 빈 폴더 중 6개가 비정상 (gate-reports, verification-logs, review-logs, thesis-drafts, submission-package, research-design). 근본 원인: thesis-orchestrator.md의 E5 루프에 파일 쓰기 지시 누락, Phase 3/4 상세 프로토콜 부재.
+- **결정**:
+  1. **E5 루프 확장**: 6→8항목. E5.3(verification-log 생성), E5.4(@reviewer 호출 + Write to review-logs). 검증자(validate_verification.py, validate_review.py)는 변경 없음 — 생성 책임을 Orchestrator에 명시.
+  2. **Gate 실행에 --output-json 활용**: validate_wave_gate.py의 기존 `--output-json` 플래그를 사용하여 gate-reports/ 저장. record_gate_result()의 기존 `report_path` 매개변수로 SOT 연결.
+  3. **Phase 3 Draft Versioning Protocol**: 리뷰→수정 사이클에서 thesis-drafts/에 v1/v2/v3 백업.
+  4. **Phase 4 Submission Package Protocol**: @manuscript-formatter, @cover-letter-writer 에이전트 호출 지시 추가.
+  5. **research-design → phase-2 경로 정규화**: init_project()에서 레거시 폴더 제거, 실제 사용 경로로 교체.
+- **근거**: 절대 기준 1(품질). 품질 검증의 감사 추적(audit trail)이 없으면 워크플로우 재현 불가. 기존 인프라(--output-json, report_path, reviewer.md 계약) 최대 활용으로 변경 최소화.
+- **대안**:
+  - 별도 Hook 스크립트로 파일 자동 생성 → 기각 (Orchestrator 지시문 수정이 더 직접적이고 결합도 낮음)
+  - validate_verification.py에 생성 기능 추가 → 기각 (P1 validator는 read-only 원칙 위반)
+- **파급 효과**: Additive-only. 기존 API 시그니처 변경 없음. E2E 테스트 108개 영향 없음.
+- **관련 파일**: `thesis-orchestrator.md` (E5, Gate, Phase 3/4 섹션), `checklist_manager.py:655`, `_test_checklist_manager.py:163`, `quality-gates.md` (§14 추가)
+
 ---
 
 ## 부록: 커밋 히스토리 기반 타임라인
@@ -864,6 +899,7 @@
 | 2026-03-05 | accepted | ADR-053: E2E Test Infrastructure — 5-Track pytest + subprocess 통합 테스트 |
 | 2026-03-05 | accepted | ADR-054: GroundedClaim Schema Unification — 47개 family-based prefix 체계 |
 | 2026-03-05 | accepted | ADR-055: --record-hitl CLI Extension — HITL 체크포인트 CLI 기록 |
+| 2026-03-05 | accepted | ADR-056: Thesis Remediation — P1 Python Boundary + Gate Regex Fix + GroundedClaim 정규화 |
 
 ---
 

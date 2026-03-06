@@ -59,6 +59,17 @@ class TestCountClaims(unittest.TestCase):
         self.assertEqual(count_claims("id: 'LS-001'"), 1)
         self.assertEqual(count_claims('id: "LS-001"'), 1)
 
+    def test_multi_hyphen_claim_id(self):
+        self.assertEqual(count_claims('id: EMP-NEURO-001'), 1)
+        self.assertEqual(count_claims('id: CR-LOGIC-001'), 1)
+        self.assertEqual(count_claims('id: MC-IV-002'), 1)
+
+    def test_claim_id_prefix(self):
+        self.assertEqual(count_claims('claim_id: PHIL-T001'), 1)
+
+    def test_bold_bracket_format(self):
+        self.assertEqual(count_claims('**[PHIL-T001]** claim_id: PHIL-T001'), 1)
+
 
 class TestExtractClaimIds(unittest.TestCase):
     """Test claim ID extraction."""
@@ -67,6 +78,11 @@ class TestExtractClaimIds(unittest.TestCase):
         content = 'id: LS-001\nid: SWA-002'
         ids = extract_claim_ids(content)
         self.assertEqual(ids, ["LS-001", "SWA-002"])
+
+    def test_extract_multi_hyphen(self):
+        content = 'id: EMP-NEURO-001\nid: CR-LOGIC-002\nclaim_id: PHIL-T003'
+        ids = extract_claim_ids(content)
+        self.assertEqual(ids, ["EMP-NEURO-001", "CR-LOGIC-002", "PHIL-T003"])
 
     def test_empty_content(self):
         self.assertEqual(extract_claim_ids(""), [])
