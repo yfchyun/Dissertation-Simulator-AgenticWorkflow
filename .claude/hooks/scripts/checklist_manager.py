@@ -136,8 +136,13 @@ SRCS_WEIGHTS = {
 # SRCS threshold (from workflow.md gra_settings)
 SRCS_THRESHOLD = 75
 
-# Phase structure for step validation
-PHASE_RANGES = {
+# Dependency groups for step validation.
+# NOTE: These are dependency enforcement groups, NOT 1:1 checklist sections.
+# Each group bundles steps that share the same prerequisite gate/hitl/phase.
+# Example: "wave-2" = (55,70) includes Gate 1 validation steps (55-58) + Wave 2 work (59-70),
+# because both require gate-1 to pass before entry.
+# For user-facing section names, use get_checklist_section_for_step().
+DEPENDENCY_GROUPS = {
     "phase-0": (1, 8),
     "phase-0-A": (9, 14),
     "phase-0-D": (15, 34),
@@ -154,17 +159,22 @@ PHASE_RANGES = {
     "hitl-5-6-7": (157, 168),
     "phase-4": (169, 176),
     "hitl-8": (177, 180),
+    "translation": (181, 210),
 }
+
+# Backward-compat alias (consumed by validate_step_sequence.py, tests)
+PHASE_RANGES = DEPENDENCY_GROUPS
 
 # Step dependencies — which phases/gates must be complete before starting
 STEP_DEPENDENCIES = {
     "wave-2": {"gate": "gate-1", "phase": "wave-1"},
     "wave-3": {"gate": "gate-2", "phase": "wave-2"},
     "wave-4": {"gate": "gate-3", "phase": "wave-3"},
-    "wave-5": {"phase": "wave-4"},
+    "wave-5": {"gate": "srcs-full", "phase": "wave-4"},
     "phase-2": {"hitl": "hitl-2"},
     "phase-3": {"hitl": "hitl-3-4"},
     "phase-4": {"hitl": "hitl-5-6-7"},
+    "translation": {"hitl": "hitl-8"},
 }
 
 # Translation step offset — each original step can have a -ko companion
@@ -281,10 +291,26 @@ def validate_thesis_sot(data: dict) -> list[str]:
             for key in ("name", "status", "tasks_pending", "tasks_completed"):
                 if key not in active_team:
                     errors.append(f"TS12: active_team missing required key '{key}'")
-            if not isinstance(active_team.get("tasks_pending", []), list):
+            # tasks_pending: accept list[str] (legacy) or list[dict] (new schema)
+            tp = active_team.get("tasks_pending", [])
+            if not isinstance(tp, list):
                 errors.append("TS12: active_team.tasks_pending must be a list")
-            if not isinstance(active_team.get("tasks_completed", []), list):
+            else:
+                for i, item in enumerate(tp):
+                    if not isinstance(item, (str, dict)):
+                        errors.append(
+                            f"TS12: active_team.tasks_pending[{i}] must be str or dict"
+                        )
+            # tasks_completed: accept list[str] (legacy) or list[dict] (new schema)
+            tc = active_team.get("tasks_completed", [])
+            if not isinstance(tc, list):
                 errors.append("TS12: active_team.tasks_completed must be a list")
+            else:
+                for i, item in enumerate(tc):
+                    if not isinstance(item, (str, dict)):
+                        errors.append(
+                            f"TS12: active_team.tasks_completed[{i}] must be str or dict"
+                        )
 
     # TS13: completed_teams must be a list of dicts (if present)
     completed_teams = data.get("completed_teams")
@@ -625,6 +651,48 @@ def generate_checklist(total_steps: int = 210) -> str:
             "HITL-8: Submission approval",
             "Generate final submission package",
         ]),
+        ("Phase 5: Finalization", [
+            "Consolidate all artifacts",
+            "Final cross-reference validation",
+            "Generate citation report",
+            "Compile supplementary materials",
+            "Create data availability statement",
+            "Final plagiarism check on complete package",
+            "Generate author contribution statement",
+            "Archive complete project",
+        ]),
+        ("Phase 6: Translation (Steps 181-210)", [
+            "@translator: Translate Chapter 1 Introduction",
+            "@translator: Validate Chapter 1 translation (T1-T9)",
+            "@translator: Translate Chapter 2 Literature Review",
+            "@translator: Validate Chapter 2 translation (T1-T9)",
+            "@translator: Translate Chapter 3 Research Methodology",
+            "@translator: Validate Chapter 3 translation (T1-T9)",
+            "@translator: Translate Chapter 4 Results/Findings",
+            "@translator: Validate Chapter 4 translation (T1-T9)",
+            "@translator: Translate Chapter 5 Discussion",
+            "@translator: Validate Chapter 5 translation (T1-T9)",
+            "@translator: Translate Chapter 6 Conclusion",
+            "@translator: Validate Chapter 6 translation (T1-T9)",
+            "@translator: Translate Abstract",
+            "@translator: Validate Abstract translation (T1-T9)",
+            "@translator: Translate Appendices",
+            "@translator: Validate Appendices translation (T1-T9)",
+            "@translator: Translate Cover Letter",
+            "@translator: Validate Cover Letter translation (T1-T9)",
+            "@translator: Cross-validate all Korean translations for consistency",
+            "@translator: Update glossary.yaml with new terms",
+            "@translator: Final bilingual format check",
+            "@translator: Generate Korean thesis summary",
+            "@translator: Validate Korean thesis summary (T1-T9)",
+            "@translator: Generate bilingual keyword index",
+            "@translator: Format bilingual reference list",
+            "@translator: Final Korean output quality review",
+            "@translator: Create bilingual submission package",
+            "@translator: Validate complete Korean package",
+            "@translator: Archive translation artifacts",
+            "@translator: Generate translation completion report",
+        ]),
     ]
 
     step_num = 1
@@ -690,13 +758,57 @@ def init_project(project_dir: Path, project_name: str, **kwargs) -> dict:
 # Step Advancement
 # ---------------------------------------------------------------------------
 
-def get_phase_for_step(step: int) -> str | None:
-    """Return the phase name for a given step number."""
-    for phase_name, (start, end) in PHASE_RANGES.items():
+def get_dependency_group(step: int) -> str | None:
+    """Return the dependency group name for a given step number.
+
+    NOTE: Dependency groups are NOT 1:1 with checklist sections.
+    For user-facing section names, use get_checklist_section_for_step().
+    """
+    for group_name, (start, end) in DEPENDENCY_GROUPS.items():
         if start <= step <= end:
-            return phase_name
+            return group_name
     if TRANSLATION_STEP_OFFSET < step <= TRANSLATION_STEP_OFFSET + 30:
         return "translation"
+    return None
+
+
+# Backward-compat alias
+get_phase_for_step = get_dependency_group
+
+
+# Checklist section boundaries — matches generate_checklist() exactly
+_CHECKLIST_SECTIONS = [
+    ("Phase 0: Initialization", 1, 8),
+    ("Phase 0-A: Topic Exploration", 9, 14),
+    ("Phase 0-D: Learning Mode", 15, 34),
+    ("HITL-1: Research Question", 35, 38),
+    ("Wave 1: Foundation Literature", 39, 54),
+    ("Gate 1: Foundation Validation", 55, 58),
+    ("Wave 2: Deep Analysis", 59, 74),
+    ("Gate 2: Deep Analysis Validation", 75, 78),
+    ("Wave 3: Critical Analysis", 79, 94),
+    ("Gate 3: Critical Analysis Validation", 95, 98),
+    ("Wave 4: Synthesis", 99, 106),
+    ("SRCS Full Evaluation", 107, 110),
+    ("Wave 5: Quality Assurance", 111, 114),
+    ("HITL-2: Literature Review Approval", 115, 120),
+    ("Phase 2: Research Design", 121, 140),
+    ("Phase 3: Thesis Writing", 141, 164),
+    ("Phase 4: Publication Strategy", 165, 172),
+    ("Phase 5: Finalization", 173, 180),
+    ("Phase 6: Translation", 181, 210),
+]
+
+
+def get_checklist_section_for_step(step: int) -> str | None:
+    """Return the user-facing checklist section name for a given step.
+
+    Unlike get_dependency_group(), this maps 1:1 to generate_checklist() sections.
+    Use this for CLI display and status reporting.
+    """
+    for name, start, end in _CHECKLIST_SECTIONS:
+        if start <= step <= end:
+            return name
     return None
 
 
@@ -724,7 +836,7 @@ def check_step_dependencies(sot: dict, target_step: int) -> list[str]:
     # Check phase dependency
     if "phase" in deps:
         req_phase = deps["phase"]
-        phase_range = PHASE_RANGES.get(req_phase)
+        phase_range = DEPENDENCY_GROUPS.get(req_phase)
         if phase_range:
             _, end_step = phase_range
             if sot.get("current_step", 0) < end_step:
@@ -840,9 +952,23 @@ def record_hitl(project_dir: Path, hitl_name: str, status: str = "completed") ->
     sot["hitl_checkpoints"][hitl_name] = {
         "status": status,
         "timestamp": now,
+        "requires_user_approval": True,
     }
     write_thesis_sot(project_dir, sot)
     return sot
+
+
+def is_hitl_blocking(project_dir: Path, hitl_name: str) -> bool:
+    """Check if a HITL checkpoint is blocking (exists but not completed).
+
+    Returns True if the HITL exists and its status is not 'completed',
+    meaning it requires user approval before the workflow can proceed.
+    """
+    sot = read_thesis_sot(project_dir)
+    hitl = sot.get("hitl_checkpoints", {}).get(hitl_name)
+    if hitl is None:
+        return False
+    return hitl.get("status") != "completed"
 
 
 # ---------------------------------------------------------------------------
@@ -944,6 +1070,19 @@ def restore_checkpoint(project_dir: Path, checkpoint_name: str) -> dict:
 # Team Management
 # ---------------------------------------------------------------------------
 
+def _find_task_in_list(task_list: list, task_id: str) -> int | None:
+    """Find a task by task_id in a list that may contain str or dict items.
+
+    Returns the index if found, None otherwise.
+    """
+    for i, item in enumerate(task_list):
+        if isinstance(item, str) and item == task_id:
+            return i
+        if isinstance(item, dict) and item.get("task_id") == task_id:
+            return i
+    return None
+
+
 def update_active_team(
     project_dir: Path,
     name: str | None = None,
@@ -952,6 +1091,8 @@ def update_active_team(
     tasks_completed: list | None = None,
     append_task: str | None = None,
     complete_task: str | None = None,
+    task_agent: str | None = None,
+    task_output_path: str | None = None,
 ) -> dict:
     """Update active_team fields in SOT.
 
@@ -960,8 +1101,10 @@ def update_active_team(
         status: Team status ("active", "completed", "failed")
         tasks_pending: Replace tasks_pending list
         tasks_completed: Replace tasks_completed list
-        append_task: Append a single task_id to tasks_pending
+        append_task: Append a single task_id to tasks_pending (stored as dict)
         complete_task: Move a task_id from tasks_pending to tasks_completed
+        task_agent: Agent name for append_task (optional)
+        task_output_path: Output path for append_task (optional)
 
     Returns:
         Updated active_team dict.
@@ -977,6 +1120,7 @@ def update_active_team(
             "status": "active",
             "tasks_pending": [],
             "tasks_completed": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
     elif team is None:
         raise ValueError("No active team and no name provided to create one")
@@ -990,12 +1134,44 @@ def update_active_team(
     if tasks_completed is not None:
         team["tasks_completed"] = tasks_completed
     if append_task is not None:
-        team.setdefault("tasks_pending", []).append(append_task)
+        task_dict = {
+            "task_id": append_task,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "agent": task_agent,
+            "output_path": task_output_path,
+            "status": "pending",
+        }
+        team.setdefault("tasks_pending", []).append(task_dict)
     if complete_task is not None:
         pending = team.get("tasks_pending", [])
-        if complete_task in pending:
-            pending.remove(complete_task)
-        team.setdefault("tasks_completed", []).append(complete_task)
+        idx = _find_task_in_list(pending, complete_task)
+        now = datetime.now(timezone.utc).isoformat()
+        if idx is not None:
+            removed = pending.pop(idx)
+            # Upgrade legacy str format to dict on completion
+            if isinstance(removed, str):
+                removed = {
+                    "task_id": removed,
+                    "created_at": None,
+                    "agent": None,
+                    "output_path": None,
+                    "status": "completed",
+                    "completed_at": now,
+                }
+            else:
+                removed["status"] = "completed"
+                removed["completed_at"] = now
+            team.setdefault("tasks_completed", []).append(removed)
+        else:
+            # Task not found in pending — still record completion
+            team.setdefault("tasks_completed", []).append({
+                "task_id": complete_task,
+                "created_at": None,
+                "agent": None,
+                "output_path": None,
+                "status": "completed",
+                "completed_at": now,
+            })
 
     sot["active_team"] = team
     sot["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -1067,7 +1243,7 @@ def get_status(project_dir: Path) -> dict:
 
     current = sot["current_step"]
     total = sot["total_steps"]
-    phase = get_phase_for_step(current) if current > 0 else "not-started"
+    phase = get_checklist_section_for_step(current) if current > 0 else "not-started"
 
     # Count completed gates
     gates = sot.get("gates", {})
@@ -1137,8 +1313,8 @@ def _cli_advance(args):
 
     try:
         sot = advance_step(project_dir, target_step, force=force)
-        phase = get_phase_for_step(target_step)
-        print(f"Advanced to step {target_step} (phase: {phase})")
+        section = get_checklist_section_for_step(target_step)
+        print(f"Advanced to step {target_step} (section: {section})")
         print(f"  Progress: {target_step}/{sot['total_steps']}")
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
@@ -1240,6 +1416,10 @@ def _cli_update_team(args):
         kwargs["status"] = args.team_status
     if args.append_task:
         kwargs["append_task"] = args.append_task
+        if getattr(args, "agent", None):
+            kwargs["task_agent"] = args.agent
+        if getattr(args, "task_output_path", None):
+            kwargs["task_output_path"] = args.task_output_path
     if args.complete_task:
         kwargs["complete_task"] = args.complete_task
 
@@ -1283,6 +1463,7 @@ def main():
     group.add_argument("--restore-checkpoint", action="store_true", help="Restore checkpoint")
     group.add_argument("--validate", action="store_true", help="Validate thesis SOT")
     group.add_argument("--record-hitl", help="Record HITL checkpoint completion (e.g., hitl-1)")
+    group.add_argument("--is-hitl-blocking", action="store_true", help="Check if a HITL checkpoint is blocking")
     group.add_argument("--update-team", action="store_true", help="Update active team fields")
     group.add_argument("--complete-team", action="store_true", help="Move active team to completed_teams")
     group.add_argument("--record-gate", action="store_true", help="Record gate result in SOT")
@@ -1296,11 +1477,14 @@ def main():
     parser.add_argument("--step", type=int, help="Target step number (for --advance)")
     parser.add_argument("--checkpoint", help="Checkpoint name")
     parser.add_argument("--hitl-status", default="completed", help="HITL status (default: completed)")
+    parser.add_argument("--hitl-name", help="HITL name (for --is-hitl-blocking)")
     parser.add_argument("--force", action="store_true", help="Force operation (skip checks)")
     parser.add_argument("--team-name", help="Team name (for --update-team)")
     parser.add_argument("--team-status", help="Team status (for --update-team)")
     parser.add_argument("--append-task", help="Task ID to append to pending (for --update-team)")
     parser.add_argument("--complete-task", help="Task ID to mark completed (for --update-team)")
+    parser.add_argument("--agent", help="Agent name for task (for --append-task)")
+    parser.add_argument("--task-output-path", help="Output path for task (for --append-task)")
     parser.add_argument("--gate-name", help="Gate name (for --record-gate)")
     parser.add_argument("--gate-status", choices=["pass", "fail"], help="Gate status (for --record-gate)")
     parser.add_argument("--report-path", help="Path to gate report JSON (for --record-gate)")
@@ -1323,6 +1507,8 @@ def main():
         return _cli_checkpoint(args)
     elif args.validate:
         return _cli_validate(args)
+    elif args.is_hitl_blocking:
+        return _cli_is_hitl_blocking(args)
     elif args.record_hitl:
         return _cli_record_hitl(args)
     elif args.update_team:
@@ -1335,6 +1521,35 @@ def main():
         return _cli_record_output(args)
     elif args.record_translation:
         return _cli_record_translation(args)
+
+
+def _cli_is_hitl_blocking(args) -> int:
+    """CLI handler for --is-hitl-blocking."""
+    hitl_name = getattr(args, "hitl_name", None)
+    # Accept hitl_name from multiple sources
+    if not hitl_name:
+        # Check all known HITL names
+        try:
+            project_dir = Path(args.project_dir)
+            sot = read_thesis_sot(project_dir)
+            blocking = []
+            for name in sot.get("hitl_checkpoints", {}).keys():
+                if is_hitl_blocking(project_dir, name):
+                    blocking.append(name)
+            result = {"blocking": len(blocking) > 0, "blocking_hitls": blocking}
+            print(json.dumps(result))
+            return 0
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 1
+    try:
+        project_dir = Path(args.project_dir)
+        blocked = is_hitl_blocking(project_dir, hitl_name)
+        print(json.dumps({"hitl": hitl_name, "blocking": blocked}))
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
 
 
 def _cli_record_gate(args) -> int:

@@ -7,6 +7,20 @@ maxTurns: 20
 memory: project
 ---
 
+## Inherited DNA
+
+This agent inherits the AgenticWorkflow genome.
+
+| DNA Component | Expression |
+|--------------|------------|
+| Absolute Criteria 1 | Quality of learning assessment output is the sole criterion; speed/token cost ignored |
+| Absolute Criteria 2 | Reads SOT (session.json) for context; never writes directly |
+| English-First | All outputs in English; Korean translation via @translator if needed |
+
+## Claim Prefix: AS
+
+Factual assertions use prefix AS-NNN for traceability.
+
 # Assessment Agent
 
 ## Role

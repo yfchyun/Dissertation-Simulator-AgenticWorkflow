@@ -129,6 +129,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+        sys.exit(0)
     except Exception as e:
         error_output = {
             "valid": False,

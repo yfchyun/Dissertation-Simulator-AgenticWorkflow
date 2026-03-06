@@ -242,7 +242,7 @@ graph TB
         end
 
         subgraph "Context Preservation + Safety"
-            CPS["hooks/scripts/<br/>36개 프로덕션 + 15개 테스트 스크립트<br/>(CP 6 + Safety 6 + Validation 14 + Obs/Diag 2 + Thesis 8 + Setup 2<br/>+ Abductive Diagnosis Layer)"]
+            CPS["hooks/scripts/<br/>40개 프로덕션 + 2개 모듈 + 21개 테스트 스크립트<br/>(CP 6 + Safety 6 + Validation 14 + Obs/Diag 2 + Thesis 8 + Utility 7 + Setup 2<br/>+ Abductive Diagnosis Layer)"]
             CSS["context-snapshots/<br/>런타임 스냅샷"]
         end
 
@@ -1561,20 +1561,18 @@ AgenticWorkflow의 DNA 유전 철학(§1.4)을 실증하는 최초의 대규모 
 ### 11.2 Phase/Wave/Gate/HITL 구조
 
 ```
-Phase 0: Literature Review (Step 1-104)
-├── Wave 1: Topic Exploration (Step 1-12)
-├── Wave 2: Deep Analysis (Step 13-30)    ── Gate-1 ──▶
-├── Wave 3: Synthesis (Step 31-54)        ── Gate-2 ──▶
-├── Wave 4: Gap Analysis (Step 55-70)     ── Gate-3 ──▶
-└── Wave 5: Framework (Step 71-104)       ── Gate-4 ──▶ HITL-2
-
-Phase 1: Research Design (Step 105-140)   ── HITL-3, HITL-4 ──▶
-                                          ── Gate-5 ──▶
-
-Phase 2: Writing & Publication (Step 141-210)
-├── HITL-5 (Format), HITL-6 (Outline)
-├── HITL-7 (Draft Review)
-└── HITL-8 (Finalization)
+Phase 0: Initialization + Topic Exploration  (Step 1-38)    ── HITL-0/1 ──▶
+Phase 1: Literature Review                   (Step 39-104)
+├── Wave 1: Basic Search         (Step 39-54)   ── Gate-1 ──▶
+├── Wave 2: Deep Analysis        (Step 55-70)   ── Gate-2 ──▶
+├── Wave 3: Critical Analysis    (Step 71-86)   ── Gate-3 ──▶
+├── Wave 4: Integrated Synthesis (Step 87-94)   ── Gate-4 ──▶
+├── Wave 5: Quality Assurance    (Step 95-98)   ── SRCS-Full ──▶
+└── HITL-2: Literature Review Approval          (Step 99-104)
+Phase 2: Research Design                     (Step 105-132) ── HITL-3/4 ──▶
+Phase 3: Thesis Writing                      (Step 133-168) ── HITL-5/6/7 ──▶
+Phase 4: Publication Strategy                (Step 169-180) ── HITL-8 ──▶
+Translation: Korean Translation              (Step 181-210)
 ```
 
 - **Gate**: Wave 간 교차 검증. 이전 Wave의 claim 품질이 임계값 미달 시 진행 차단.
@@ -1596,7 +1594,31 @@ Phase 2: Writing & Publication (Step 141-210)
 | `fallback_history` | Fallback 이벤트 이력 |
 | `context_snapshots` | 체크포인트 이력 |
 
-### 11.4 에이전트 아키텍처 (48 agents)
+**Dependency Groups (DEPENDENCY_GROUPS)**:
+
+17개 의존성 그룹이 Gate/HITL 전제 조건을 관리한다. 이 그룹은 체크리스트 섹션(19개)과 1:1 대응하지 않으며, 동일한 전제 조건(gate/hitl/phase)을 공유하는 step 범위를 묶는다:
+
+| Group | Steps | 전제 조건 |
+|-------|-------|----------|
+| `phase-0` | 1-8 | — |
+| `phase-0-A` | 9-14 | — |
+| `phase-0-D` | 15-34 | — |
+| `hitl-1` | 35-38 | — |
+| `wave-1` | 39-54 | — |
+| `wave-2` | 55-70 | gate-1 + wave-1 |
+| `wave-3` | 71-86 | gate-2 + wave-2 |
+| `wave-4` | 87-94 | gate-3 + wave-3 |
+| `wave-5` | 95-98 | srcs-full + wave-4 |
+| `hitl-2` | 99-104 | — |
+| `phase-2` | 105-124 | hitl-2 |
+| `hitl-3-4` | 125-132 | — |
+| `phase-3` | 133-156 | hitl-3-4 |
+| `hitl-5-6-7` | 157-168 | — |
+| `phase-4` | 169-176 | hitl-5-6-7 |
+| `hitl-8` | 177-180 | — |
+| `translation` | 181-210 | hitl-8 |
+
+### 11.4 에이전트 아키텍처 (52 agents (4 base + 48 thesis))
 
 | 역할 | 에이전트 예시 | Phase |
 |------|------------|-------|
@@ -1615,7 +1637,7 @@ Phase 2: Writing & Publication (Step 141-210)
 | `query_workflow.py` | 논문 관측성 — dashboard, weakest-step, blocked, retry |
 | `validate_grounded_claim.py` | GroundedClaim ID 검증 (47개 prefix) |
 | `fallback_controller.py` | 3-tier Fallback 제어 |
-| `guard_sot_write.py` | 논문 SOT 쓰기 보호 |
+| `guard_sot_write.py` | 논문 SOT 쓰기 보호 (Edit\|Write 차단, fail-closed) |
 
 ---
 

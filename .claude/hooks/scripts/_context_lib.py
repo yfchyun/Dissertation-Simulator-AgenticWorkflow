@@ -26,7 +26,7 @@ import time
 import fcntl
 import subprocess
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -78,6 +78,33 @@ E5_RICH_SIGNALS = [
     E5_COMPLETION_STATE_MARKER,     # "## 결정론적 완료 상태"
     E5_DESIGN_DECISIONS_MARKER,     # "## 주요 설계 결정"
 ]
+
+# P1-RLM: Snapshot Section Markers — enables selective peek (programmatic access)
+# HTML comments are invisible to normal readers but parseable by restore_context.py.
+# Keys are stable identifiers; values are the exact marker strings.
+# restore_context.py imports this dict to avoid constant duplication (shotgun surgery prevention).
+SNAPSHOT_SECTION_MARKERS = {
+    "header":           "<!-- SECTION:header -->",
+    "task":             "<!-- SECTION:task -->",
+    "next_step":        "<!-- SECTION:next_step -->",
+    "sot":              "<!-- SECTION:sot -->",
+    "autopilot":        "<!-- SECTION:autopilot -->",
+    "quality_gate":     "<!-- SECTION:quality_gate -->",
+    "team":             "<!-- SECTION:team -->",
+    "ulw":              "<!-- SECTION:ulw -->",
+    "diagnosis":        "<!-- SECTION:diagnosis -->",
+    "decisions":        "<!-- SECTION:decisions -->",
+    "resume":           "<!-- SECTION:resume -->",
+    "completion":       "<!-- SECTION:completion -->",
+    "git":              "<!-- SECTION:git -->",
+    "modified_files":   "<!-- SECTION:modified_files -->",
+    "referenced_files": "<!-- SECTION:referenced_files -->",
+    "user_messages":    "<!-- SECTION:user_messages -->",
+    "responses":        "<!-- SECTION:responses -->",
+    "statistics":       "<!-- SECTION:statistics -->",
+    "commands":         "<!-- SECTION:commands -->",
+    "work_log":         "<!-- SECTION:work_log -->",
+}
 
 # --- Truncation limits (Quality First — 절대 기준 1) ---
 # Edit preview: "왜" 그 편집을 했는지 의도 파악 가능한 길이
@@ -1559,8 +1586,10 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     sections = []
 
     # ━━━ SURVIVAL PRIORITY 1: IMMORTAL ━━━
+    SM = SNAPSHOT_SECTION_MARKERS  # shorthand
 
     # Header (P1-3: include phase flow if multi-phase detected)
+    sections.append(SM["header"])
     sections.append(f"# Context Recovery — Session {session_id}")
     sections.append(f"> Saved: {now} | Trigger: {trigger}")
     sections.append(f"> Project: {project_dir}")
@@ -1576,6 +1605,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
 
     # Section 1: Current Task (first + last user message — verbatim)
     # CM-6: IMMORTAL — user messages are the ground truth for task context
+    sections.append(SM["task"])
     sections.append("## 현재 작업 (Current Task)")
     sections.append("<!-- IMMORTAL: 사용자 작업 지시 — 세션 복원의 핵심 맥락 -->")
     # CM-C: Filter system commands (/clear, /help, etc.) — show real task, not commands
@@ -1603,12 +1633,14 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     # CM-3: Promoted to independent IMMORTAL section for Phase 7 hard truncate survival
     next_step = _extract_next_step(assistant_texts)
     if next_step:
+        sections.append(SM["next_step"])
         sections.append("## 다음 단계 (Next Step)")
         sections.append("<!-- IMMORTAL: 세션 복원 시 인지적 연속성의 핵심 — 다음 행동 지시 -->")
         sections.append(next_step)
         sections.append("")
 
     # Section 2: SOT State (deterministic file read)
+    sections.append(SM["sot"])
     sections.append("## SOT 상태 (Workflow State)")
     if sot_content:
         sections.append(f"파일: `{sot_content['path']}`")
@@ -1624,6 +1656,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     try:
         ap_state = read_autopilot_state(project_dir)
         if ap_state:
+            sections.append(SM["autopilot"])
             sections.append("## Autopilot 상태 (Autopilot State)")
             sections.append("<!-- IMMORTAL: 세션 복원 시 반드시 보존 -->")
             sections.append("")
@@ -1671,6 +1704,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     try:
         gate_lines = _extract_quality_gate_state(project_dir)
         if gate_lines:
+            sections.append(SM["quality_gate"])
             sections.append("## 품질 게이트 상태 (Quality Gate State)")
             sections.append(
                 "<!-- IMMORTAL: 세션 복원 시 Verification/pACS/Review 재개 맥락 -->"
@@ -1685,6 +1719,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     try:
         team_state = read_active_team_state(project_dir)
         if team_state:
+            sections.append(SM["team"])
             sections.append("## Agent Team 상태 (Active Team State)")
             sections.append("<!-- IMMORTAL: 세션 복원 시 반드시 보존 — RLM Layer 2 -->")
             sections.append("")
@@ -1719,6 +1754,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     try:
         ulw_state = detect_ulw_mode(entries)
         if ulw_state:
+            sections.append(SM["ulw"])
             sections.append("## ULW 상태 (Ultrawork Mode State)")
             sections.append("<!-- IMMORTAL: 세션 복원 시 반드시 보존 -->")
             sections.append("")
@@ -1774,6 +1810,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
                 f for f in os.listdir(diag_dir) if f.endswith(".md")
             ])
             if diag_files:
+                sections.append(SM["diagnosis"])
                 sections.append("### Diagnosis State")
                 sections.append("<!-- IMMORTAL: 세션 경계에서 진단 맥락 보존 -->")
                 sections.append("")
@@ -1797,6 +1834,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
 
     # Section 2.7: Design Decisions (C-1 — IMMORTAL, conditional)
     if decisions:
+        sections.append(SM["decisions"])
         sections.append(f"{E5_DESIGN_DECISIONS_MARKER} (Design Decisions)")
         sections.append("<!-- IMMORTAL: 세션 복원 시 '왜' 그 결정을 했는지 보존 -->")
         sections.append("")
@@ -1805,6 +1843,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
         sections.append("")
 
     # Section 3: Resume Protocol (deterministic — P1 compliant)
+    sections.append(SM["resume"])
     sections.append("## 복원 지시 (Resume Protocol)")
     sections.append("<!-- Python 결정론적 생성 — P1 준수 -->")
     sections.append("")
@@ -1857,6 +1896,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     sections.append("")
 
     # Section 4: Deterministic Completion State (E7 — hallucination prevention)
+    sections.append(SM["completion"])
     sections.append(f"{E5_COMPLETION_STATE_MARKER} (Deterministic Completion State)")
     sections.append("<!-- Python 결정론적 생성 — Claude 해석 불필요, 직접 참조 -->")
     sections.append("")
@@ -1934,6 +1974,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
 
     # Section 5: Git Changes (E2 — ground truth, post-commit aware)
     if any(git_state.values()):
+        sections.append(SM["git"])
         sections.append("## Git 변경 상태 (Git Changes)")
         if git_state["status"]:
             sections.append("### Working Tree")
@@ -1955,6 +1996,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     # ━━━ SURVIVAL PRIORITY 2: CRITICAL ━━━
 
     # Section 6: Modified Files with per-edit details (E3)
+    sections.append(SM["modified_files"])
     sections.append("## 수정된 파일 (Modified Files)")
     if file_ops:
         for op in file_ops:
@@ -1968,6 +2010,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     sections.append("")
 
     # Section 7: Referenced Files
+    sections.append(SM["referenced_files"])
     sections.append("## 참조된 파일 (Referenced Files)")
     if read_ops:
         sections.append("| 파일 경로 | 횟수 |")
@@ -1979,6 +2022,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     sections.append("")
 
     # Section 8: User Messages (verbatim — last N)
+    sections.append(SM["user_messages"])
     sections.append("## 사용자 요청 이력 (User Messages)")
     if user_msgs_filtered:
         for i, msg in enumerate(user_msgs_filtered[-12:], 1):
@@ -1988,6 +2032,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     sections.append("")
 
     # Section 9: Claude Key Responses (E4 — priority selection, promoted)
+    sections.append(SM["responses"])
     sections.append("## Claude 핵심 응답 (Key Responses)")
     meaningful_texts = [
         t for t in assistant_texts
@@ -2041,6 +2086,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     # ━━━ SURVIVAL PRIORITY 3: SACRIFICABLE ━━━
 
     # Section 10: Statistics
+    sections.append(SM["statistics"])
     sections.append("## 대화 통계")
     sections.append(f"- 총 메시지: {len(user_msgs_filtered) + len(assistant_texts)}개")
     sections.append(f"- 도구 사용: {len(tool_uses)}회")
@@ -2052,6 +2098,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     sections.append("")
 
     # Section 11: Commands Executed
+    sections.append(SM["commands"])
     sections.append("## 실행된 명령 (Commands Executed)")
     bash_ops = [t for t in tool_uses if t.get("tool_name") == "Bash"]
     if bash_ops:
@@ -2068,6 +2115,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
 
     # Section 12: Work Log Summary
     if work_log:
+        sections.append(SM["work_log"])
         sections.append("## 작업 로그 요약 (Work Log Summary)")
         sections.append(f"총 기록: {len(work_log)}개")
         for entry in work_log[-25:]:
@@ -2479,6 +2527,31 @@ def _compress_snapshot(full_md, sections):
     if len(result) <= MAX_SNAPSHOT_CHARS:
         return _append_compression_audit(result, audit)
 
+    # H10: Extract phase transition markers before response compression
+    # Preserve lines containing "→" or "phase" transition indicators in IMMORTAL section
+    phase_transition_markers = []
+    for line in compressed:
+        if ("→" in line and any(kw in line.lower() for kw in
+                                ("phase", "research", "implementation", "planning", "orchestration"))) \
+                or re.search(r"(?:phase|단계)\s*(?:transition|전환|change)", line, re.I):
+            marker_text = line.strip()[:150]
+            if marker_text and len(phase_transition_markers) < 3:
+                phase_transition_markers.append(
+                    f"<!-- PHASE_TRANSITION: {marker_text} -->"
+                )
+
+    # Inject phase transition markers into IMMORTAL header area (after first "# Context Recovery" line)
+    if phase_transition_markers:
+        injected = []
+        header_found = False
+        for line in compressed:
+            injected.append(line)
+            if not header_found and line.startswith("# Context Recovery"):
+                header_found = True
+                for marker in phase_transition_markers:
+                    injected.append(marker)
+        compressed = injected
+
     # Phase 6: Compress Claude responses (preserve conclusion — last 300 chars)
     prev_size = len(result)
     compressed = _compress_responses(compressed)
@@ -2500,7 +2573,8 @@ def _compress_snapshot(full_md, sections):
     in_immortal_section = False
     for line in compressed:
         # IMMORTAL marker always (re-)enters IMMORTAL mode
-        if "<!-- IMMORTAL:" in line:
+        # H10: PHASE_TRANSITION markers are also treated as IMMORTAL
+        if "<!-- IMMORTAL:" in line or "<!-- PHASE_TRANSITION:" in line:
             in_immortal_section = True
         # Non-IMMORTAL section header exits IMMORTAL mode
         # Must check AFTER marker check so marker on same line wins
@@ -2566,6 +2640,13 @@ def _compress_section_entries(sections, section_header, keep_first=0, keep_last=
             in_section = False
             result.append(line)
             continue
+        # P1-RLM: SECTION markers adjacent to section headers are part of the section
+        if in_section and line.startswith("<!-- SECTION:"):
+            _emit_compressed_entries(result, section_entries, keep_first, keep_last)
+            section_entries = []
+            in_section = False
+            result.append(line)
+            continue
         if in_section and line.startswith("- "):
             section_entries.append(line)
             continue
@@ -2609,14 +2690,30 @@ def _remove_section(sections, section_header):
     """Remove an entire section (header to next ## header) from sections list."""
     result = []
     in_section = False
+    # P1-RLM: Track preceding SECTION marker for removal with section
+    pending_marker = None
     for line in sections:
+        # If this is a SECTION marker, hold it — only emit if not followed by removed section
+        if line.startswith("<!-- SECTION:") and not in_section:
+            pending_marker = line
+            continue
         if section_header in line:
             in_section = True
+            pending_marker = None  # Drop the preceding marker too
             continue
         if in_section and line.startswith("## "):
             in_section = False
             result.append(line)
             continue
+        if in_section and line.startswith("<!-- SECTION:"):
+            # Next section's marker — end current removed section
+            in_section = False
+            result.append(line)
+            continue
+        # Emit held marker if it wasn't consumed by a removed section
+        if pending_marker is not None:
+            result.append(pending_marker)
+            pending_marker = None
         # When removing a ### subsection, stop at the next sibling ### header
         if in_section and section_header.startswith("### ") and line.startswith("### ") and section_header not in line:
             in_section = False
@@ -3025,6 +3122,88 @@ def _extract_success_patterns(entries):
     return patterns[:5]
 
 
+def _extract_hypothesis_graveyard(work_log_entries):
+    """H3: Extract tried-and-failed approaches from work log.
+
+    Looks for patterns in assistant responses that indicate:
+    - "tried X but failed" / "doesn't work" / "wrong approach"
+    - "considered X" / "alternatively" followed by rejection
+
+    P1 Compliance: Deterministic regex-based extraction.
+    Returns: list of max 5 entries:
+        [{"text": "...", "status": "tried|considered", "outcome": "..."}]
+    """
+    # Patterns indicating tried-and-failed approaches
+    _TRIED_PATTERNS = [
+        # "tried X but failed/didn't work"
+        re.compile(
+            r"(?:tried|attempted|tested)\s+(.{10,80}?)\s+(?:but|however)\s+(.{5,80}?)(?:\.|$)",
+            re.I,
+        ),
+        # "X doesn't work / didn't work / won't work"
+        re.compile(
+            r"(.{10,80}?)\s+(?:doesn't|didn't|does not|did not|won't|will not)\s+work(.{0,60}?)(?:\.|$)",
+            re.I,
+        ),
+        # "wrong approach / incorrect approach"
+        re.compile(
+            r"(?:wrong|incorrect|bad|failed)\s+(?:approach|method|strategy)\s*[:—-]?\s*(.{10,80}?)(?:\.|$)",
+            re.I,
+        ),
+    ]
+    _CONSIDERED_PATTERNS = [
+        # "considered X but" / "alternatively X ... however"
+        re.compile(
+            r"(?:considered|evaluated|explored)\s+(.{10,80}?)\s+(?:but|however)\s+(.{5,80}?)(?:\.|$)",
+            re.I,
+        ),
+        # "ruled out X" / "rejected X" / "discarded X"
+        re.compile(
+            r"(?:ruled out|rejected|discarded|abandoned)\s+(.{10,80}?)(?:\s+(?:because|due to|since)\s+(.{5,80}?))?(?:\.|$)",
+            re.I,
+        ),
+    ]
+
+    results = []
+    assistant_texts = [
+        e for e in work_log_entries
+        if e.get("type") == "assistant_text"
+    ]
+
+    for entry in assistant_texts:
+        content = entry.get("content", "")
+        if not content:
+            continue
+
+        # Check tried patterns
+        for pat in _TRIED_PATTERNS:
+            for m in pat.finditer(content):
+                text = m.group(1).strip()
+                outcome = m.group(2).strip() if m.lastindex >= 2 else "failed"
+                results.append({
+                    "text": text[:120],
+                    "status": "tried",
+                    "outcome": outcome[:120],
+                })
+                if len(results) >= 5:
+                    return results
+
+        # Check considered patterns
+        for pat in _CONSIDERED_PATTERNS:
+            for m in pat.finditer(content):
+                text = m.group(1).strip()
+                outcome = m.group(2).strip() if m.lastindex >= 2 and m.group(2) else "rejected"
+                results.append({
+                    "text": text[:120],
+                    "status": "considered",
+                    "outcome": outcome[:120],
+                })
+                if len(results) >= 5:
+                    return results
+
+    return results[:5]
+
+
 def _extract_pacs_from_sot(project_dir):
     """CM-1: Extract pACS min-score from SOT (read-only).
 
@@ -3147,20 +3326,63 @@ def extract_session_facts(session_id, trigger, project_dir, entries, token_estim
     # CM-D + E-3: Tool sequence — consecutive distinct tool names (run-length compressed)
     # Captures work patterns like "Read→Read→Edit→Bash→Read→Edit" → "Read(2)→Edit→Bash→Read→Edit"
     tool_sequence_parts = []
+    tool_sequence_with_files_parts = []  # H5: includes file basenames
     prev_tool = None
     count = 0
+    segment_files = []  # H5: track file paths per RLE segment
     for tu in tool_uses:
         name = tu.get("tool_name", "unknown")
         if name == prev_tool:
             count += 1
+            fp = tu.get("file_path", "")
+            if fp:
+                bn = os.path.basename(fp)
+                if bn and bn not in segment_files:
+                    segment_files.append(bn)
         else:
             if prev_tool:
                 tool_sequence_parts.append(f"{prev_tool}({count})" if count > 1 else prev_tool)
+                # H5: Build file-annotated segment
+                file_hint = ",".join(segment_files[:2])
+                if file_hint:
+                    if count > 1:
+                        tool_sequence_with_files_parts.append(
+                            f"{prev_tool}({count},[{file_hint}])")
+                    else:
+                        tool_sequence_with_files_parts.append(
+                            f"{prev_tool}([{file_hint}])")
+                else:
+                    tool_sequence_with_files_parts.append(
+                        f"{prev_tool}({count})" if count > 1 else prev_tool)
             prev_tool = name
             count = 1
+            segment_files = []
+            fp = tu.get("file_path", "")
+            if fp:
+                bn = os.path.basename(fp)
+                if bn:
+                    segment_files.append(bn)
     if prev_tool:
         tool_sequence_parts.append(f"{prev_tool}({count})" if count > 1 else prev_tool)
+        file_hint = ",".join(segment_files[:2])
+        if file_hint:
+            if count > 1:
+                tool_sequence_with_files_parts.append(
+                    f"{prev_tool}({count},[{file_hint}])")
+            else:
+                tool_sequence_with_files_parts.append(
+                    f"{prev_tool}([{file_hint}])")
+        else:
+            tool_sequence_with_files_parts.append(
+                f"{prev_tool}({count})" if count > 1 else prev_tool)
     tool_sequence = "→".join(tool_sequence_parts[-30:])  # Last 30 segments to cap size
+
+    # H5: tool_sequence_with_files — file-annotated RLE, capped at 500 chars
+    tsf_parts = tool_sequence_with_files_parts[-30:]
+    tool_sequence_with_files = "→".join(tsf_parts)
+    while len(tool_sequence_with_files) > 500 and tsf_parts:
+        tsf_parts.pop(0)  # Drop oldest segments to fit cap
+        tool_sequence_with_files = "→".join(tsf_parts)
 
     # B-3: Phase detection — current dominant phase
     phase = detect_conversation_phase(tool_uses)
@@ -3200,6 +3422,7 @@ def extract_session_facts(session_id, trigger, project_dir, entries, token_estim
         "phase_flow": phase_flow,
         "primary_language": primary_language,
         "tool_sequence": tool_sequence,  # CM-D + E-3: work pattern analysis
+        "tool_sequence_with_files": tool_sequence_with_files,  # H5: file-annotated RLE
     }
 
     # A4: Search tags — language-independent path-derived keywords for RLM probing
@@ -3281,6 +3504,11 @@ def extract_session_facts(session_id, trigger, project_dir, entries, token_estim
     diagnosis_patterns = _extract_diagnosis_patterns(project_dir)
     if diagnosis_patterns:
         facts["diagnosis_patterns"] = diagnosis_patterns
+
+    # 7. H3: Hypothesis Graveyard — tried-and-failed approaches for cross-session learning
+    rejected_hypotheses = _extract_hypothesis_graveyard(entries)
+    if rejected_hypotheses:
+        facts["rejected_hypotheses"] = rejected_hypotheses
 
     # Mark ETERNAL fields for archival protection
     facts["_eternal_fields"] = ["team_summaries", "diagnosis_patterns", "design_decisions"]
@@ -3460,8 +3688,11 @@ def _archive_to_quarterly(snapshot_dir, overflow_lines):
             if dd and dd not in q["design_decisions"]:
                 q["design_decisions"].append(dd)
 
-        # Collect team summaries
-        for ts_entry in entry.get("team_summaries", []):
+        # Collect team summaries (handles both list and dict formats)
+        ts_data = entry.get("team_summaries", [])
+        if isinstance(ts_data, dict):
+            ts_data = list(ts_data.values())
+        for ts_entry in ts_data:
             if ts_entry:
                 q["team_summaries"].append(ts_entry)
 
@@ -3473,8 +3704,13 @@ def _archive_to_quarterly(snapshot_dir, overflow_lines):
         # Aggregate files and tools
         for f in entry.get("modified_files", []):
             q["modified_files"][f] += 1
-        for t in entry.get("tools_used", []):
-            q["tools_used"][t] += 1
+        tu = entry.get("tools_used", {})
+        if isinstance(tu, dict):
+            for t, count in tu.items():
+                q["tools_used"][t] += count if isinstance(count, int) else 1
+        else:
+            for t in tu:
+                q["tools_used"][t] += 1
 
     # Write quarterly summaries (append mode)
     try:
@@ -3665,6 +3901,66 @@ def _extract_quality_gate_state(project_dir):
                 diag_hyp = selected.group(1).strip() if selected else "?"
                 lines.append(
                     f"- **Diagnosis**: gate={diag_gate}, hypothesis={diag_hyp}"
+                )
+        except Exception:
+            pass
+
+    # H4: Retry trajectory tracking — scan all attempts for the latest step
+    # Collect pACS scores across retry attempts (step-N-pacs.md, step-N-retry-1-pacs.md, etc.)
+    pacs_dir = os.path.join(project_dir, "pacs-logs")
+    if os.path.isdir(pacs_dir):
+        try:
+            score_history = []
+            retry_pattern = re.compile(
+                rf"step-{max_step}(?:-retry-(\d+))?-pacs\.md$"
+            )
+            pacs_files = []
+            for fname in os.listdir(pacs_dir):
+                m = retry_pattern.match(fname)
+                if m:
+                    retry_num = int(m.group(1)) if m.group(1) else 0
+                    pacs_files.append((retry_num, fname))
+            pacs_files.sort()
+            for _, fname in pacs_files:
+                fpath = os.path.join(pacs_dir, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        content = f.read(2000)
+                    sm = re.search(
+                        r"pACS\s*=.*?=\s*(\d{1,3})|pACS\s*=\s*(\d{1,3})",
+                        content, re.IGNORECASE,
+                    )
+                    if sm:
+                        score_history.append(int(sm.group(1) or sm.group(2)))
+                except Exception:
+                    continue
+
+            attempts = len(pacs_files)
+            if attempts > 0:
+                # Determine trend from last 3 scores
+                trend = "unknown"
+                if len(score_history) >= 3:
+                    last3 = score_history[-3:]
+                    spread = max(last3) - min(last3)
+                    if spread <= 5:
+                        trend = "plateauing"
+                    elif last3[-1] > last3[0]:
+                        trend = "improving"
+                    else:
+                        trend = "degrading"
+                elif len(score_history) == 2:
+                    if score_history[-1] > score_history[0]:
+                        trend = "improving"
+                    elif score_history[-1] < score_history[0]:
+                        trend = "degrading"
+                    else:
+                        trend = "plateauing"
+                elif len(score_history) == 1:
+                    trend = "initial"
+
+                lines.append(
+                    f"- **Retry Trajectory**: attempts={attempts}, "
+                    f"scores={score_history[-5:]}, trend={trend}"
                 )
         except Exception:
             pass

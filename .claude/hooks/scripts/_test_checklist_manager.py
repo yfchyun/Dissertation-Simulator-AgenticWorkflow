@@ -475,12 +475,12 @@ class TestConstants(unittest.TestCase):
                 all_steps.add(s)
 
     def test_phase_ranges_contiguous(self):
-        """Phase ranges should cover steps 1 through 180."""
+        """Phase ranges should cover steps 1 through 210."""
         all_steps = set()
         for _, (start, end) in cm.PHASE_RANGES.items():
             all_steps.update(range(start, end + 1))
         self.assertEqual(min(all_steps), 1)
-        self.assertEqual(max(all_steps), 180)
+        self.assertEqual(max(all_steps), 210)
 
 
 class TestCLIRecordGate(unittest.TestCase):

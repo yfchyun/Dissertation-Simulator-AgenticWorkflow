@@ -42,15 +42,15 @@ class TestPhaseRanges(unittest.TestCase):
     """Test phase range constants (imported from checklist_manager)."""
 
     def test_16_phases_defined(self):
-        self.assertEqual(len(PHASE_RANGES), 16)
+        self.assertEqual(len(PHASE_RANGES), 17)
 
     def test_phases_start_at_1(self):
         min_start = min(start for start, _ in PHASE_RANGES.values())
         self.assertEqual(min_start, 1)
 
-    def test_phases_end_at_180(self):
+    def test_phases_end_at_210(self):
         max_end = max(end for _, end in PHASE_RANGES.values())
-        self.assertEqual(max_end, 180)
+        self.assertEqual(max_end, 210)
 
     def test_no_gaps_in_coverage(self):
         all_steps = set()

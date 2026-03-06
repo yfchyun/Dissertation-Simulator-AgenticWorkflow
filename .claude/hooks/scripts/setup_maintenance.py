@@ -247,6 +247,23 @@ def _check_knowledge_index(project_dir):
         )
 
     size_kb = os.path.getsize(ki_path) / 1024
+
+    # P3-RLM: Proactive quarterly archival for long-term knowledge preservation
+    # When entries approach MAX (200), verify quarterly archive exists.
+    # cleanup_knowledge_index() only archives overflow (>200), so we check
+    # quarterly archive health independently as a maintenance action.
+    if total_lines > 100:
+        try:
+            snapshot_dir = os.path.join(project_dir, ".claude", "context-snapshots")
+            qa_path = os.path.join(snapshot_dir, "knowledge-archive-quarterly.jsonl")
+            qa_exists = os.path.exists(qa_path)
+            qa_note = f", quarterly archive: {'exists' if qa_exists else 'not yet created (created when >200)'}"
+            return _result(
+                INFO, "PASS", "Knowledge index",
+                f"{total_lines} entries ({size_kb:.0f}KB), all valid JSON{qa_note}",
+            )
+        except Exception:
+            pass  # Non-blocking
     return _result(
         INFO, "PASS", "Knowledge index",
         f"{total_lines} entries ({size_kb:.0f}KB), all valid JSON",

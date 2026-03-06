@@ -114,4 +114,9 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        # Fail-closed: SOT write guard blocks on unexpected errors
+        # to prevent unauthorized writes (Absolute Standard 2)
+        sys.exit(2)

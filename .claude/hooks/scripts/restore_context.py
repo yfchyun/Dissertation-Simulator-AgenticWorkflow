@@ -24,6 +24,7 @@ SOT Compliance:
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -35,7 +36,40 @@ from _context_lib import (
     read_stdin_json, get_snapshot_dir, read_autopilot_state,
     validate_step_output, validate_sot_schema, sot_paths,
     extract_path_tags, aggregate_risk_scores, atomic_write,
+    SNAPSHOT_SECTION_MARKERS,
 )
+
+
+# Module-level compiled regex (process-level singleton)
+_SECTION_MARKER_RE = re.compile(r'<!-- SECTION:(\w+) -->')
+_TOKENIZE_SPLIT_RE = re.compile(r'[^a-zA-Z0-9가-힣_\-./]+')
+
+
+_ENGLISH_STOP_WORDS = frozenset({
+    "is", "to", "do", "an", "if", "or", "in", "on", "at", "as",
+    "be", "by", "no", "so", "up", "we", "it", "of", "am", "he",
+    "me", "my", "us", "vs",
+})
+
+
+def _tokenize(text):
+    """Split text into keyword tokens for relevance scoring.
+
+    P1 Compliance: Deterministic — regex split + filter.
+    Preserves Korean characters, file path segments, and identifiers.
+    M10: Minimum length reduced from 3 to 2; uppercase acronyms (2+ chars) preserved.
+    Stop words filtered to prevent English 2-char noise from inflating scores.
+    """
+    if not text:
+        return set()
+    # M10: Extract uppercase acronyms (2+ chars) before lowercasing
+    acronyms = {t for t in _TOKENIZE_SPLIT_RE.split(text) if len(t) >= 2 and t.isupper()}
+    tokens = _TOKENIZE_SPLIT_RE.split(text.lower())
+    # M10: Changed minimum token length from 3 to 2
+    result = {t for t in tokens if len(t) > 1 and t not in _ENGLISH_STOP_WORDS}
+    # M10: Merge back lowercase versions of acronyms (already included) + original case
+    result.update(a.lower() for a in acronyms)
+    return result
 
 
 # Maximum age (seconds) for snapshot restoration per source type
@@ -127,11 +161,141 @@ def main():
 def _extract_brief_summary(content):
     """Extract key information from snapshot for brief summary.
 
+    P1-RLM Selective Peek: Uses SECTION markers for precise section extraction
+    when available. Falls back to legacy line-by-line parsing for pre-P1 snapshots.
+
     Deterministic extraction from snapshot structure:
       - 현재 작업 (Current Task): first content line
       - 수정된 파일 (Modified Files): count of table rows
       - 참조된 파일 (Referenced Files): count of table rows
       - 대화 통계: numeric stats lines
+    """
+    # P1-RLM: Try section-marker-based extraction first
+    sections = parse_snapshot_sections(content)
+    if "_full" not in sections:
+        return _extract_summary_from_sections(sections, content)
+
+    # Fallback: legacy line-by-line parsing (pre-P1 snapshots without markers)
+    return _extract_summary_legacy(content)
+
+
+def _extract_summary_from_sections(sections, full_content):
+    """P1-RLM: Extract summary using parsed SECTION markers.
+
+    Direct section access eliminates line-by-line scanning.
+    Each section's content is parsed independently, reducing
+    cross-section interference and improving extraction accuracy.
+    """
+    summary_parts = []
+
+    # Task section
+    task_text = sections.get("task", "")
+    if task_text:
+        for line in task_text.split("\n"):
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith(">") or line.startswith("<!--"):
+                continue
+            if line.startswith("**최근 지시") or line.startswith("**Latest Instruction"):
+                instruction = line.split(":**", 1)[-1].strip() if ":**" in line else line
+                summary_parts.append(("최근 지시", instruction[:200]))
+            elif not any(l == "현재 작업" for l, _ in summary_parts):
+                summary_parts.append(("현재 작업", line[:200]))
+
+    # Completion state section
+    completion_text = sections.get("completion", "")
+    if completion_text:
+        for line in completion_text.split("\n"):
+            line = line.strip()
+            if line.startswith("- ") and ("실패" in line or "성공" in line):
+                summary_parts.append(("완료상태", line[:150]))
+            elif "ERROR" in line:
+                summary_parts.append(("에러", line[:200]))
+
+    # Git section
+    git_text = sections.get("git", "")
+    if git_text:
+        in_code_block = False
+        for line in git_text.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                continue
+            if in_code_block and (stripped.startswith("M ") or stripped.startswith(" M") or
+                                  stripped.startswith("A ") or stripped.startswith("??")):
+                summary_parts.append(("git", stripped[:100]))
+
+    # Modified files section
+    files_count = 0
+    files_text = sections.get("modified_files", "")
+    if files_text:
+        for line in files_text.split("\n"):
+            line = line.strip()
+            if line.startswith("| `") or line.startswith("### `"):
+                files_count += 1
+                if '`' in line:
+                    backtick_parts = line.split('`')
+                    if len(backtick_parts) >= 2 and backtick_parts[1]:
+                        summary_parts.append(("수정_파일_경로", backtick_parts[1]))
+
+    # Referenced files section
+    read_count = 0
+    refs_text = sections.get("referenced_files", "")
+    if refs_text:
+        for line in refs_text.split("\n"):
+            if line.strip().startswith("| `"):
+                read_count += 1
+
+    # Statistics section
+    stats_text = sections.get("statistics", "")
+    if stats_text:
+        for line in stats_text.split("\n"):
+            line = line.strip()
+            if line.startswith("- "):
+                summary_parts.append(("통계", line[:100]))
+
+    # Error detection from recent tool activity (in completion or resume sections)
+    for section_key in ("completion", "resume"):
+        sec_text = sections.get(section_key, "")
+        if "← ERROR" in sec_text:
+            for line in sec_text.split("\n"):
+                if "← ERROR" in line:
+                    summary_parts.append(("에러", line.strip()[:200]))
+
+    # Autopilot section (direct — no full-content scan needed)
+    autopilot_text = sections.get("autopilot", "")
+    if autopilot_text:
+        for line in autopilot_text.split("\n"):
+            if "현재 단계:" in line:
+                summary_parts.append(("autopilot", line.strip()[:100]))
+                break
+
+    # ULW section (direct — no full-content scan needed)
+    ulw_text = sections.get("ulw", "")
+    if ulw_text:
+        summary_parts.append(("ulw", "ULW (Ultrawork) Mode Active"))
+
+    # Team section (direct)
+    team_text = sections.get("team", "")
+    if team_text:
+        for line in team_text.split("\n"):
+            if "tasks_pending" in line.lower() or "tasks_completed" in line.lower():
+                summary_parts.append(("team", line.strip()[:100]))
+                break
+
+    # File counts
+    if files_count > 0:
+        summary_parts.append(("수정 파일", f"{files_count}개 파일 수정됨"))
+    if read_count > 0:
+        summary_parts.append(("참조 파일", f"{read_count}개 파일 참조됨"))
+
+    return summary_parts
+
+
+def _extract_summary_legacy(content):
+    """Legacy line-by-line summary extraction for pre-P1 snapshots.
+
+    Preserved for backward compatibility with snapshots that lack
+    <!-- SECTION: --> markers.
     """
     summary_parts = []
 
@@ -381,6 +545,30 @@ def _build_recovery_output(source, latest_path, summary, sot_warning, snapshot_a
             if error_info:
                 output_lines.append(f'  - Grep "resolution" {ki_path} → 에러→해결 패턴 포함 세션')
 
+            # P0-RLM: Active Knowledge Retrieval — relevance-scored
+            # Surface past sessions most relevant to CURRENT work context
+            file_paths_for_retrieval = [c for l, c in summary if l == "수정_파일_경로"]
+            relevant = _retrieve_relevant_sessions(
+                ki_path, task_info or "", file_paths_for_retrieval
+            )
+            if relevant:
+                output_lines.append("")
+                output_lines.append("■ ACTIVE RETRIEVAL — 현재 작업과 관련된 과거 세션:")
+                for score, sess in relevant:
+                    ts = sess.get("timestamp", "")[:10]
+                    past_task = (sess.get("user_task", "") or "(기록 없음)")[:80]
+                    session_id_short = sess.get("session_id", "?")[:8]
+                    output_lines.append(
+                        f"  - [{ts}] {past_task} (relevance:{score:.1f}, id:{session_id_short})"
+                    )
+                    # Surface actionable Grep for the most relevant session
+                    if score >= 5.0:
+                        sid = sess.get("session_id", "")
+                        if sid:
+                            output_lines.append(
+                                f'    → Grep "{sid[:12]}" {ki_path} → 이 세션의 상세 정보'
+                            )
+
             # P1-1: Proactive Error→Resolution surfacing
             # Surface recent error patterns + resolutions directly (no manual Grep)
             error_resolutions = _extract_recent_error_resolutions(recent)
@@ -408,12 +596,18 @@ def _build_recovery_output(source, latest_path, summary, sot_warning, snapshot_a
                 for th in team_hints[:3]:
                     output_lines.append(f"  - {th}")
 
-            # P1-4: Quarterly archive pointer (long-term patterns)
+            # P3-RLM: Active Quarterly Archive consumption (long-term patterns)
             qa_path = os.path.join(ka_snapshot_dir, "knowledge-archive-quarterly.jsonl")
-            if os.path.exists(qa_path):
+            qa_insights = _extract_quarterly_insights(qa_path)
+            if qa_insights:
+                output_lines.append("")
+                output_lines.append("■ 장기 패턴 (Quarterly Archive — 자동 표면화):")
+                for insight in qa_insights[:5]:
+                    output_lines.append(f"  - {insight}")
+                output_lines.append(f"  (원본: {qa_path})")
+            elif os.path.exists(qa_path):
                 output_lines.append(f"■ 분기별 아카이브: {qa_path}")
                 output_lines.append(f'  - Grep "error_patterns_aggregated" {qa_path} → 장기 에러 추세')
-                output_lines.append(f'  - Grep "team_summaries" {qa_path} → 장기 팀 실행 이력')
 
         if os.path.isdir(sessions_dir):
             output_lines.append(f"■ 세션 아카이브: {sessions_dir}")
@@ -640,6 +834,201 @@ def _extract_recent_team_summaries(recent_sessions):
         if len(results) >= 3:
             break
     return results[:3]
+
+
+def parse_snapshot_sections(md_text):
+    """P1-RLM: Parse snapshot into sections using SECTION markers.
+
+    Splits a snapshot markdown string at <!-- SECTION:name --> boundaries,
+    returning a dict mapping section names to their content.
+
+    If no markers are found (pre-P1 snapshot), returns {"_full": md_text}.
+    Non-blocking: returns partial results on any parse error.
+
+    P1 Compliance: Deterministic string splitting.
+    """
+    marker_pattern = _SECTION_MARKER_RE
+
+    sections = {}
+    current_name = "_preamble"
+    current_lines = []
+
+    for line in md_text.split("\n"):
+        match = marker_pattern.match(line.strip())
+        if match:
+            # Save previous section (even if empty)
+            sections[current_name] = "\n".join(current_lines)
+            current_name = match.group(1)
+            current_lines = []
+        else:
+            current_lines.append(line)
+
+    # Save last section
+    sections[current_name] = "\n".join(current_lines)
+
+    # If no markers found, return full text
+    if len(sections) <= 1 and "_preamble" in sections:
+        return {"_full": md_text}
+
+    return sections
+
+
+# IMMORTAL sections that should always be loaded during selective peek
+IMMORTAL_SECTIONS = {
+    "header", "task", "next_step", "sot", "autopilot",
+    "quality_gate", "team", "ulw", "diagnosis", "decisions",
+    "resume", "completion", "git",
+}
+
+
+def _retrieve_relevant_sessions(ki_path, task_info, file_paths, max_results=3):
+    """P0-RLM: Active Knowledge Retrieval — relevance-scored session matching.
+
+    Instead of showing only the N most recent sessions, this function scores
+    ALL knowledge-index entries by relevance to the current session context
+    (task description + modified files) and returns the top matches.
+
+    Scoring heuristic (deterministic, P1 compliant):
+      - Keyword overlap between current task and past user_task/last_instruction
+      - File path overlap between current modified files and past modified_files
+      - Tag overlap between current path_tags and past tags
+
+    Returns: list of (score, session_dict) tuples, sorted by score desc.
+    Non-blocking: returns empty list on any error.
+    """
+    if not os.path.exists(ki_path):
+        return []
+
+    try:
+        all_sessions = []
+        with open(ki_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        all_sessions.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+        if not all_sessions:
+            return []
+
+        # Build current context keywords
+        current_keywords = _tokenize(task_info)
+        current_files = set(file_paths) if file_paths else set()
+        current_file_basenames = {os.path.basename(f) for f in current_files if f}
+
+        scored = []
+        for session in all_sessions:
+            score = 0.0
+
+            # 1. Task keyword overlap (weight: 2.0 per match)
+            past_task = session.get("user_task", "") or ""
+            past_last = session.get("last_instruction", "") or ""
+            past_keywords = _tokenize(past_task) | _tokenize(past_last)
+            keyword_overlap = current_keywords & past_keywords
+            score += len(keyword_overlap) * 2.0
+
+            # 2. File path exact match (weight: 5.0 per match)
+            past_files = session.get("modified_files", [])
+            if isinstance(past_files, list):
+                past_file_set = set(past_files)
+                file_overlap = current_files & past_file_set
+                score += len(file_overlap) * 5.0
+
+                # 2b. Basename overlap (weight: 2.0) — catches path variations
+                past_basenames = {os.path.basename(f) for f in past_files if f}
+                basename_overlap = current_file_basenames & past_basenames
+                score += len(basename_overlap - {os.path.basename(f) for f in file_overlap}) * 2.0
+
+            # 3. Tag overlap (weight: 3.0 per match)
+            past_tags = session.get("tags", [])
+            if isinstance(past_tags, list) and current_files:
+                current_tags = set(extract_path_tags(list(current_files)))
+                tag_overlap = current_tags & set(past_tags)
+                score += len(tag_overlap) * 3.0
+
+            # 4. Error pattern type match (weight: 1.5) — same error types recur
+            past_errors = session.get("error_patterns", [])
+            if isinstance(past_errors, list) and past_errors:
+                # M8: Proportional error pattern scoring (count-based + resolution bonus)
+                resolved = sum(1 for e in past_errors if isinstance(e, dict) and e.get("resolution"))
+                score += min(len(past_errors) * 0.3, 3.0)  # Count-based, capped at 3.0
+                score += min(resolved * 0.5, 2.5)  # Resolution bonus, capped at 2.5
+
+            if score > 0:
+                scored.append((score, session))
+
+        # Sort by score descending, take top N
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return scored[:max_results]
+    except Exception:
+        return []
+
+
+def _extract_quarterly_insights(qa_path):
+    """P3-RLM: Extract actionable insights from quarterly archive.
+
+    Reads knowledge-archive-quarterly.jsonl and surfaces:
+    - Top recurring error types across quarters
+    - Persistent high-touch files (frequently modified)
+    - Design decision continuity
+
+    P1 Compliance: Deterministic aggregation from structured JSON data.
+    Non-blocking: returns empty list on any error.
+    Returns: list of human-readable insight strings.
+    """
+    if not os.path.exists(qa_path):
+        return []
+
+    try:
+        quarters = []
+        with open(qa_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        quarters.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+        if not quarters:
+            return []
+
+        insights = []
+
+        # 1. Aggregate error patterns across all quarters
+        error_totals = {}
+        total_sessions = 0
+        for q in quarters:
+            total_sessions += q.get("session_count", 0)
+            for etype, count in q.get("error_patterns_aggregated", {}).items():
+                error_totals[etype] = error_totals.get(etype, 0) + count
+
+        if error_totals:
+            top_errors = sorted(error_totals.items(), key=lambda x: x[1], reverse=True)[:3]
+            error_str = ", ".join(f"{t}({c})" for t, c in top_errors)
+            insights.append(f"반복 에러: {error_str} (총 {total_sessions} 세션)")
+
+        # 2. Top modified files across quarters
+        file_totals = {}
+        for q in quarters:
+            for fpath, count in q.get("top_modified_files", {}).items():
+                file_totals[fpath] = file_totals.get(fpath, 0) + count
+        if file_totals:
+            top_files = sorted(file_totals.items(), key=lambda x: x[1], reverse=True)[:3]
+            for fpath, count in top_files:
+                basename = os.path.basename(fpath)
+                insights.append(f"고빈도 수정: {basename} ({count}회)")
+
+        # 3. Design decision count
+        total_decisions = sum(
+            len(q.get("design_decisions", [])) for q in quarters
+        )
+        if total_decisions > 0:
+            insights.append(f"누적 설계 결정: {total_decisions}개 ({len(quarters)}분기)")
+
+        return insights
+    except Exception:
+        return []
 
 
 def _find_best_snapshot(snapshot_dir, latest_path):

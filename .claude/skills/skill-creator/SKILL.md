@@ -15,15 +15,18 @@ AgenticWorkflow's DNA inheritance patterns.
 - User wants to automate a repeatable workflow as a skill
 - System needs to generate skills for thesis workflow agents
 
-## Inherited DNA (from soul.md)
+## Inherited DNA
 
-Every generated skill MUST include:
-1. **Absolute Criteria** — contextualized for the skill's domain
-2. **SOT Pattern** — single-file state management if applicable
-3. **3-Stage Structure** — Research → Planning → Implementation
-4. **Quality Gates** — L0 Anti-Skip → L1 Verification → L1.5 pACS → L2 Review
-5. **P1 Enforcement** — Python scripts for deterministic tasks
-6. **Safety Hooks** — appropriate guards for the domain
+This meta-skill inherits the AgenticWorkflow genome. As a skill that generates other skills, it must itself embody the DNA it enforces.
+
+| DNA Component | Expression in skill-creator |
+|--------------|---------------------------|
+| Absolute Criteria 1 (Quality) | Generated skills are evaluated solely on output quality, not speed or token cost |
+| Absolute Criteria 2 (SOT) | Generated skills must define their SOT pattern; skill-creator validates this |
+| Absolute Criteria 3 (CCP) | Generated skills include CCP contextualization; CAP-1~4 anchored to domain |
+| English-First | All generated skill instructions are in English; user-facing triggers may be bilingual |
+| P1 Compliance | Generated skills must include deterministic validation scripts |
+| Quality Gates | Generated skills reference L0-L2 quality layers appropriate to their domain |
 
 ## Generation Protocol
 

@@ -1,9 +1,19 @@
 ---
 name: workflow-generator
-description: Claude Code용 워크플로우(workflow.md) 자동 생성 스킬. 사용자가 "워크플로우 만들어줘", "workflow 생성", "자동화 파이프라인 설계", "작업 흐름 정의" 등을 요청할 때 사용. 대화를 통해 사용자의 의도를 파악하고, Research → Planning → Implementation 3단계 구조의 workflow.md를 생성. Claude Code의 sub-agents, agent teams(swarm), hooks, skills, slash commands, MCP servers를 활용한 구현 설계 포함.
+description: "Automated workflow (workflow.md) generator for Claude Code. Produces Research → Planning → Implementation 3-stage workflows with sub-agents, agent teams, hooks, skills, and slash commands."
 ---
 
 # Workflow Generator
+
+## Inherited DNA
+
+This skill inherits the AgenticWorkflow genome.
+
+| DNA Component | Expression |
+|--------------|------------|
+| Absolute Criteria 1 | Quality of generated workflow is the sole criterion; speed/token cost ignored |
+| Absolute Criteria 2 | Reads SOT for context; writes workflow.md and supporting files |
+| English-First | All workflow definitions in English; Korean documentation via @translator if needed |
 
 Claude Code용 워크플로우 정의 파일(workflow.md)을 설계하고 생성하는 스킬.
 

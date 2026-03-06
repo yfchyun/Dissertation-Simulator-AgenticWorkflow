@@ -891,7 +891,7 @@ outputs:
 
 ### 개요
 
-210-step 박사 논문 연구 시뮬레이션 워크플로우입니다. Phase 0(문헌 검토) → Phase 1(연구 설계) → Phase 2(집필·출판)의 3단계로, 48개 전문 에이전트가 논문 연구의 전 과정을 지원합니다.
+210-step 박사 논문 연구 시뮬레이션 워크플로우입니다. Phase 0(초기화·주제 탐색) → Phase 1(문헌 검토) → Phase 2(연구 설계) → Phase 3(논문 집필) → Phase 4(출판 전략) → Translation(한국어 번역)의 6단계로, 52개 전문 에이전트 (기반 4 + 논문 48)가 논문 연구의 전 과정을 지원합니다.
 
 ### 빠른 시작
 
@@ -927,17 +927,13 @@ outputs:
 ### Wave/Gate/HITL 구조
 
 ```
-Wave 1-5 (문헌 검토)
-  └── Gate 1-4: Wave 간 교차 검증 — claim 품질 미달 시 진행 차단
-  └── HITL-2: 문헌 분석 종합 인간 승인
-
-Phase 1 (연구 설계)
-  └── HITL-3: 연구 유형 설정
-  └── HITL-4: 연구 설계 승인
-  └── Gate 5: 연구 설계 교차 검증
-
-Phase 2 (집필·출판)
-  └── HITL-5~8: 형식, 개요, 초고, 최종 확정
+Phase 0: Initialization + Topic Exploration  (Step 1-38)   ── HITL-0/1
+Phase 1: Literature Review                   (Step 39-104)
+  └── Wave 1-5 + Gate 1-4 + SRCS-Full + HITL-2
+Phase 2: Research Design                     (Step 105-132) ── HITL-3/4
+Phase 3: Thesis Writing                      (Step 133-168) ── HITL-5/6/7
+Phase 4: Publication Strategy                (Step 169-180) ── HITL-8
+Translation: Korean Translation              (Step 181-210)
 ```
 
 ### 논문 SOT (`session.json`)

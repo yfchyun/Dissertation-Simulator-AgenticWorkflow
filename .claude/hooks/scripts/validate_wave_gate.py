@@ -41,13 +41,13 @@ GATE_CONFIG = {
         "wave": 4,
         "min_claims_per_file": 5,
         "min_files": 2,
-        "description": "SRCS Full Evaluation (Wave 4 → Wave 5)",
+        "description": "SRCS Full Evaluation — validates SRCS scores specifically on Wave 4 synthesis outputs (Wave 4 → Wave 5)",
     },
     "final-quality": {
-        "wave": 4,
+        "wave": 5,
         "min_claims_per_file": 5,
         "min_files": 2,
-        "description": "Final Quality Gate (All Waves → HITL-2)",
+        "description": "Final Quality Gate — validates the COMPLETE submission package including plagiarism check and all quality metrics (All Waves → HITL-2)",
     },
 }
 

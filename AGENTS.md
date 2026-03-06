@@ -275,7 +275,8 @@ AgenticWorkflow/
 │   ├── agents/                ← Sub-agent 정의
 │   │   ├── translator.md     (영→한 번역 전문 에이전트 — glossary 기반 용어 일관성)
 │   │   ├── reviewer.md       (Adversarial Review — 코드/산출물 비판적 분석, 읽기 전용)
-│   │   └── fact-checker.md   (Adversarial Review — 외부 사실 검증, 웹 접근)
+│   │   ├── fact-checker.md   (Adversarial Review — 외부 사실 검증, 웹 접근)
+│   │   └── micro-verifier.md (경량 스팟체크 — haiku 모델, 단일 claim/output 즉시 검증)
 │   ├── commands/              ← Slash Commands
 │   │   ├── install.md         (Setup Init 검증 결과 분석 — /install)
 │   │   └── maintenance.md     (Setup Maintenance 건강 검진 — /maintenance)

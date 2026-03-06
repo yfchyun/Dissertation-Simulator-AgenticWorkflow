@@ -217,6 +217,8 @@ def validate_all_steps(project_dir: str) -> list[dict]:
 def main():
     parser = argparse.ArgumentParser(description="Step Sequence Validator")
     parser.add_argument("--project-dir", required=True)
+    parser.add_argument("--json", action="store_true",
+                        help="Output JSON (for orchestrator consumption)")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--step", type=int, help="Validate specific step")
     group.add_argument("--check-all", action="store_true",
@@ -225,6 +227,9 @@ def main():
 
     if args.check_all:
         results = validate_all_steps(args.project_dir)
+        if args.json:
+            print(json.dumps(results, ensure_ascii=False))
+            return 1 if any("issue" in r for r in results) else 0
         for r in results:
             if "error" in r:
                 print(f"ERROR: {r['error']}")
@@ -236,6 +241,9 @@ def main():
         return 1 if has_issues else 0
 
     result = validate_step(args.project_dir, args.step)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result["can_proceed"] else 1
     status = "OK" if result["can_proceed"] else "BLOCKED"
     print(f"Step {args.step}: {status}")
     for err in result["errors"]:

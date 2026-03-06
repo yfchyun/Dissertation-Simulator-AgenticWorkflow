@@ -83,6 +83,10 @@ def main():
 
     result = validate_output(args.file, args.min_size)
 
+    # NOTE: After this validation passes, the caller (orchestrator) is
+    # responsible for calling TaskUpdate (e.g., checklist_manager.py
+    # --update-team --complete-task <task_id>) to record completion in SOT.
+    # This script only validates the output file; it does NOT update SOT state.
     if result["passed"]:
         print(f"PASS: {args.file} ({result['size']} bytes)")
         return 0

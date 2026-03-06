@@ -81,10 +81,11 @@ AgenticWorkflow/
 │   └── code-change-protocol.md      (CCP 3단계 + CAP + 비례성 규칙)
 ├── .claude/
 │   ├── settings.json                ← Hook 설정
-│   ├── agents/                      ← Sub-agent 정의 (51개: 기반 3 + 논문 48)
+│   ├── agents/                      ← Sub-agent 정의 (52개: 기반 4 + 논문 48)
 │   │   ├── translator.md            (영→한 번역, glossary 기반)
 │   │   ├── reviewer.md              (적대적 리뷰어, Enhanced L2)
 │   │   ├── fact-checker.md          (사실 검증, claim-by-claim)
+│   │   ├── micro-verifier.md        (경량 스팟체크, haiku 모델 — RLM micro-verification)
 │   │   ├── thesis-orchestrator.md   (논문 워크플로우 총괄 — Wave/Gate/HITL 관리)
 │   │   └── ... (48개 논문 전문 에이전트 — 문헌 검색·분석·연구 설계·작성·출판)
 │   ├── commands/                    ← Slash Commands (28개: 시스템 2 + 라우터 1 + 논문 25)
@@ -92,7 +93,7 @@ AgenticWorkflow/
 │   │   ├── install.md               (/install — Setup Init 검증)
 │   │   ├── maintenance.md           (/maintenance — 건강 검진)
 │   │   └── thesis-*.md (25개)       (/thesis-init, /thesis-start, /thesis-status 등 — 논문 워크플로우)
-│   ├── hooks/scripts/               ← Hook + 검증 스크립트 (36개 프로덕션 + 15개 테스트)
+│   ├── hooks/scripts/               ← Hook + 검증 스크립트 (40개 프로덕션 + 2개 모듈 + 21개 테스트)
 │   │   ├── context_guard.py         (통합 디스패처)
 │   │   ├── _context_lib.py          (공유 라이브러리 — 파싱·생성·검증·압축)
 │   │   ├── save_context.py          (SessionEnd/PreCompact 저장)

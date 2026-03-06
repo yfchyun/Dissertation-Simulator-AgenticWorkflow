@@ -17,6 +17,7 @@ import argparse
 import json
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Import SOT functions from checklist_manager — single source of truth.
@@ -44,8 +45,17 @@ def load_fallback_log(project_dir: str) -> list[dict]:
         return []
 
 
+MAX_FALLBACK_HISTORY = 50
+
+
 def save_fallback_log(project_dir: str, log: list[dict]) -> None:
-    """Save fallback history to thesis SOT's fallback_history field."""
+    """Save fallback history to thesis SOT's fallback_history field.
+
+    Rotates to last MAX_FALLBACK_HISTORY entries if limit exceeded.
+    """
+    # Trim to last MAX_FALLBACK_HISTORY entries if exceeded
+    if len(log) > MAX_FALLBACK_HISTORY:
+        log = log[-MAX_FALLBACK_HISTORY:]
     project_path = Path(project_dir)
     sot = read_thesis_sot(project_path)
     sot["fallback_history"] = log
@@ -109,7 +119,34 @@ def check_tier_status(
             "retries": retries,
         }
 
-    # Check for stale output (timeout-based)
+    # Check task timestamps from active_team (preferred over file mtime)
+    now_ts = time.time()
+    try:
+        sot = read_thesis_sot(Path(project_dir))
+        active_team = sot.get("active_team")
+        if active_team and isinstance(active_team, dict):
+            for task in active_team.get("tasks_pending", []):
+                if isinstance(task, dict) and task.get("created_at"):
+                    try:
+                        created = datetime.fromisoformat(task["created_at"])
+                        age = now_ts - created.timestamp()
+                        if age > timeout:
+                            nxt = next_tier(current)
+                            return {
+                                "step": step,
+                                "current_tier": current,
+                                "should_escalate": nxt is not None,
+                                "reason": f"task_timeout (task '{task.get('task_id', '?')}' age {int(age)}s > {timeout}s)",
+                                "next_tier": nxt,
+                                "retries": retries,
+                            }
+                    except (ValueError, OSError):
+                        pass
+    except (FileNotFoundError, ValueError, json.JSONDecodeError):
+        pass
+
+    # FALLBACK: Check for stale output via file mtime (backward compat)
+    # Runs when no task timestamps triggered an early return above
     project = Path(project_dir)
     wave_dir = project / "wave-results"
     if wave_dir.is_dir():
@@ -120,7 +157,7 @@ def check_tier_status(
                 latest_mtime = mtime
 
         if latest_mtime > 0:
-            age = time.time() - latest_mtime
+            age = now_ts - latest_mtime
             if age > timeout:
                 nxt = next_tier(current)
                 return {

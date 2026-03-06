@@ -15,6 +15,19 @@ requirements following AgenticWorkflow conventions.
 - System needs to generate agents for a workflow (e.g., thesis agents)
 - Batch creation of multiple related agents
 
+## Inherited DNA
+
+This meta-skill inherits the AgenticWorkflow genome. As a skill that generates agents, it must itself embody the DNA it enforces.
+
+| DNA Component | Expression in subagent-creator |
+|--------------|-------------------------------|
+| Absolute Criteria 1 (Quality) | Generated agents use optimal model selection (opus for research, sonnet for utility) |
+| Absolute Criteria 2 (SOT) | Generated agents respect single-writer SOT pattern; guard_sot_write.py compatibility |
+| Absolute Criteria 3 (CCP) | Research agents include GRA compliance; utility agents document CCP exemption rationale |
+| English-First | All agent instructions are in English |
+| P1 Compliance | Research agents include GroundedClaim schema + Hallucination Firewall |
+| Quality Gates | Research agents integrate with validate_grounded_claim.py PostToolUse hook |
+
 ## Agent File Schema
 
 Agent definitions live in `.claude/agents/` and follow this structure:

@@ -1,6 +1,6 @@
 # Dissertation Simulator
 
-**AI 에이전트 48개가 협업하는 210-step 박사 논문 연구 시뮬레이션 시스템.**
+**AI 에이전트 52개가 협업하는 210-step 박사 논문 연구 시뮬레이션 시스템.**
 
 주제 탐색에서 학술지 투고까지, 박사 논문 연구의 전 과정을 AI 에이전트가 지원합니다.
 문헌 검토(5 Wave) → 연구 설계(양적/질적/혼합) → 논문 집필 → 출판 전략의 4단계로 구성되며,
@@ -51,14 +51,14 @@ Translation: 한국어 번역             (Step 181-210)
 
 | 특징 | 설명 |
 |------|------|
-| **48개 전문 에이전트** | 문헌 검색·분석·연구 설계·작성·출판 각 과정에 전문화된 AI 에이전트 |
+| **52개 전문 에이전트** | 문헌 검색·분석·연구 설계·작성·출판 각 과정에 전문화된 AI 에이전트 (기반 4 + 논문 48) |
 | **GRA 3계층 품질 보장** | Agent Self-Verification → Cross-Validation Gate → SRCS 통합 평가 |
 | **9개 HITL 체크포인트** | 연구 방향·방법론·최종 산출물에 대한 인간 연구자의 승인 |
 | **7가지 Input Mode** | 주제(A), 연구질문(B), 기존문헌(C), 학습(D), 선행논문(E), 제안서(F), 커스텀(G) |
-| **GroundedClaim 스키마** | 43개 고유 prefix, 6가지 claim 유형, Hallucination Firewall |
+| **GroundedClaim 스키마** | 47개 고유 prefix, 6가지 claim 유형, Hallucination Firewall |
 | **3-tier Fallback** | Team → Sub-agent → Direct 실행으로 복원력 보장 |
 | **Context Reset Model** | 4개 HITL 지점에서 안전한 컨텍스트 리셋 + 3-File Memory로 복원 |
-| **25개 Slash Commands** | `/thesis-init`, `/thesis-start`, `/thesis-status` 등 전체 워크플로우 제어 |
+| **28개 Slash Commands** | `/thesis-init`, `/thesis-start`, `/thesis-status` 등 전체 워크플로우 제어 |
 
 ## 프로젝트 구조
 
@@ -84,13 +84,13 @@ Dissertation-Simulator-AgenticWorkflow/
 │  ── 논문 워크플로우 인프라 ──
 ├── .claude/
 │   ├── settings.json         # Hook 설정
-│   ├── agents/               # 51개 에이전트 (기반 3 + 논문 48)
+│   ├── agents/               # 52개 에이전트 (기반 4 + 논문 48)
 │   │   ├── thesis-orchestrator.md    (총괄 조율)
 │   │   ├── literature-searcher.md    (문헌 검색)
 │   │   ├── synthesis-agent.md        (통합 합성)
 │   │   └── ... (48개 논문 전문 에이전트)
-│   ├── commands/              # 27개 Slash Commands (시스템 2 + 논문 25)
-│   ├── hooks/scripts/         # 49개 스크립트 (프로덕션 35 + 테스트 14)
+│   ├── commands/              # 28개 Slash Commands (시스템 2 + 라우터 1 + 논문 25)
+│   ├── hooks/scripts/         # 63개 스크립트 (프로덕션 40 + 모듈 2 + 테스트 21)
 │   │   ├── checklist_manager.py      (논문 SOT 관리)
 │   │   ├── query_workflow.py         (워크플로우 관측성)
 │   │   ├── validate_grounded_claim.py (claim 검증)
