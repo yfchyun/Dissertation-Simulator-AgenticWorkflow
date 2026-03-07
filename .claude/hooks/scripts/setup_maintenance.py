@@ -90,6 +90,8 @@ REQUIRED_SCRIPTS = [
     "format_grounded_claims.py",
     "generate_thesis_outline.py",
     "verify_translation_terms.py",
+    # Fork safety P1 validator (Phase G)
+    "validate_fork_safety.py",
 ]
 
 # Severity levels

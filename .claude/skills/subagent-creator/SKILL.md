@@ -95,9 +95,32 @@ Write the agent `.md` file with:
 5. **Quality rules**: Domain-specific quality requirements
 6. **GRA compliance** (if research agent): GroundedClaim schema, Hallucination Firewall rules
 
-### Step 5: GRA Integration (Research Agents Only)
+### Step 5: Context Isolation Assessment
 
-For agents that produce research claims, include:
+Determine if commands invoking this agent should use `context: fork`:
+
+| Factor | Inline (no fork) | Fork recommended |
+|--------|-----------------|------------------|
+| Agent is part of orchestration flow | ✅ | ❌ |
+| Agent writes to SOT | ✅ (orchestrator only) | ❌ never |
+| Agent does independent analysis/production | ❌ | ✅ |
+| Agent needs Bash for P1 validation scripts | Fork requires Bash in tool list | Check tool compatibility |
+| Agent's work would pollute main context | ❌ | ✅ |
+
+**If fork is recommended**, note this in the agent's documentation:
+```markdown
+## Fork Compatibility
+This agent is safe for `context: fork` invocation. It:
+- Reads SOT but never writes to it
+- Produces independent output files at {output_path}
+- Does not require Bash / Does require Bash (specify)
+```
+
+**Most thesis workflow agents should NOT be forked** — they are invoked by thesis-orchestrator within Agent Teams, which already provides context isolation.
+
+### Step 6: GRA Integration (Research Agents Only)
+
+For agents that produce research claims, add:
 
 ```markdown
 ## GRA Compliance
@@ -118,7 +141,7 @@ All claims must follow the GroundedClaim schema:
 - VERIFY: "it is known that" → add citation
 ```
 
-### Step 6: Validate Agent Definition
+### Step 7: Validate Agent Definition
 
 Verify the generated agent:
 - [ ] Frontmatter has all required fields
@@ -128,8 +151,12 @@ Verify the generated agent:
 - [ ] Tool list matches actual needs
 - [ ] GRA compliance section present (if research agent)
 - [ ] No placeholder content
+- [ ] **Fork Safety Cross-Validation** (if fork-compatible in Step 5):
+      Any command/skill using `agent: {this-agent}` with `context: fork` must pass:
+      `python3 .claude/hooks/scripts/validate_fork_safety.py --file <command.md> --project-dir <project-root>`
+      Validates FS-3 (Bash dependency vs agent tools) and FS-5 (agent existence).
 
-### Step 7: Register Agent
+### Step 8: Register Agent
 
 Output:
 1. Agent file location: `.claude/agents/{name}.md`
@@ -158,4 +185,5 @@ When creating multiple related agents:
 - [ ] Instructions are specific and actionable
 - [ ] GRA compliance complete (for research agents)
 - [ ] Claim prefix unique (for GRA agents)
+- [ ] Fork compatibility assessed (Step 5) and documented if applicable
 - [ ] No hardcoded file paths

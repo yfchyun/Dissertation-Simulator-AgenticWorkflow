@@ -62,6 +62,9 @@ The generated SKILL.md must follow this template:
 ---
 name: {skill-name}
 description: {one-line description for skill matching}
+# Optional — context isolation and agent type (see Selection Criteria below)
+# context: fork          # omit for inline (default), add for isolated execution
+# agent: general-purpose # only with context: fork — Explore | Plan | general-purpose | <custom-agent>
 ---
 
 # {Skill Title}
@@ -81,6 +84,30 @@ description: {one-line description for skill matching}
 {List of deterministic validations, if any}
 ```
 
+#### `context: fork` + `agent` Selection Criteria
+
+These optional frontmatter fields control **where** and **how** the skill executes. Default is inline (no field needed).
+
+| Criterion | Inline (default) | Fork |
+|-----------|-----------------|------|
+| User interaction needed (Q&A, HITL) | ✅ | ❌ |
+| Works within ongoing conversation context | ✅ | ❌ |
+| Independent analysis/transformation | ❌ | ✅ |
+| Execution details would pollute main context | ❌ | ✅ |
+| SOT access | Direct | Read-only (file output → Orchestrator records in SOT) |
+
+**Constraints — fork MUST NOT be used when:**
+- Skill writes to SOT directly (violates Absolute Criteria 2 single-writer)
+- Skill requires sequential quality gate passage (L0→L1→L1.5→L2) with main context visibility
+- Skill needs Bash but the specified agent lacks Bash tool access
+- Skill is part of the main orchestration flow (router, resume, HITL gates)
+
+**`agent` field** specifies which agent type runs the forked context. Only meaningful with `context: fork`:
+- `Explore` — read-only codebase search (haiku model)
+- `Plan` — architecture research, read-only
+- `general-purpose` — full tool access, multi-step tasks
+- `{custom-agent}` — any agent defined in `.claude/agents/` (inherits that agent's model, tools, behavior)
+
 ### Step 4: Generate Reference Files
 
 Create supporting documents in `references/`:
@@ -91,13 +118,16 @@ Create supporting documents in `references/`:
 ### Step 5: Validate Generated Skill
 
 Verify the generated skill:
-- [ ] SKILL.md has valid frontmatter (name, description)
+- [ ] SKILL.md has valid frontmatter (name, description; optional: context, agent)
 - [ ] Inherited DNA section present with all applicable genome components
 - [ ] Protocol has clear, numbered steps
 - [ ] Quality gates defined
 - [ ] References directory populated
 - [ ] No hardcoded paths (uses relative references)
 - [ ] Language: internal instructions in English, user-facing in Korean
+- [ ] **Fork Safety P1 Validation** (if `context: fork` in frontmatter):
+      Run `python3 .claude/hooks/scripts/validate_fork_safety.py --file <generated-SKILL.md> --project-dir <project-root>`
+      Must PASS all 5 rules (FS-1~FS-5). FAIL → fix violations before proceeding to Step 6.
 
 ### Step 6: Register Skill
 

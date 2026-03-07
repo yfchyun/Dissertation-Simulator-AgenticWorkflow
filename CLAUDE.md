@@ -94,7 +94,7 @@ AgenticWorkflow/
 │   │   ├── install.md               (/install — Setup Init 검증)
 │   │   ├── maintenance.md           (/maintenance — 건강 검진)
 │   │   └── thesis-*.md (26개)       (/thesis-init, /thesis-start, /thesis-status, /thesis-translate 등 — 논문 워크플로우)
-│   ├── hooks/scripts/               ← Hook + 검증 스크립트 (42개 프로덕션 + 2개 모듈 + 22개 테스트)
+│   ├── hooks/scripts/               ← Hook + 검증 스크립트 (43개 프로덕션 + 2개 모듈 + 23개 테스트)
 │   │   ├── context_guard.py         (통합 디스패처)
 │   │   ├── _context_lib.py          (공유 라이브러리 — 파싱·생성·검증·압축)
 │   │   ├── _claim_patterns.py       (Claim ID 정규식 SOT — 모든 스크립트 공유 모듈)
@@ -139,7 +139,8 @@ AgenticWorkflow/
 │   │   ├── extract_references.py    (인용 추출·정렬 — P1 결정론적)
 │   │   ├── format_grounded_claims.py (GroundedClaim YAML 포맷팅 — P1 결정론적)
 │   │   ├── generate_thesis_outline.py (마크다운 기반 목차 추출 — P1 결정론적)
-│   │   └── _test_*.py (22개)        (유닛 테스트 — 각 프로덕션 스크립트 대응)
+│   │   ├── validate_fork_safety.py  (Fork 안전성 P1 검증 — FS-1~FS-5 결정론적, CLI 도구)
+│   │   └── _test_*.py (23개)        (유닛 테스트 — 각 프로덕션 스크립트 대응)
 │   ├── context-snapshots/           ← 런타임 (gitignored)
 │   └── skills/
 │       ├── workflow-generator/      (워크플로우 설계·생성)
