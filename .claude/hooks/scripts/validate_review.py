@@ -33,6 +33,8 @@ from _context_lib import (
     calculate_pacs_delta,
     validate_review_sequence,
     verify_pacs_arithmetic,
+    verify_verdict_consistency,
+    validate_file_coverage,
 )
 
 
@@ -55,6 +57,10 @@ def main():
     parser.add_argument(
         "--check-pacs-arithmetic", action="store_true",
         help="Also validate pACS arithmetic (T9 — generator + reviewer)"
+    )
+    parser.add_argument(
+        "--check-file-coverage", type=str, default=None,
+        help="Comma-separated list of files that MUST appear in review report (CR6)"
     )
     args = parser.parse_args()
 
@@ -106,6 +112,16 @@ def main():
     if remediations:
         output["remediations"] = remediations
 
+    # H3: Verdict-Issue consistency check (P1 deterministic)
+    verdict_warnings = verify_verdict_consistency(
+        verdict, verdict_data["critical_count"], verdict_data["warning_count"]
+    )
+    if verdict_warnings:
+        output["warnings"].extend(verdict_warnings)
+        # VERDICT_INCONSISTENCY with Critical issues → mark invalid
+        if any("VERDICT_INCONSISTENCY" in w for w in verdict_warnings):
+            output["valid"] = False
+
     # pACS Delta reconciliation warning
     if pacs_data["needs_reconciliation"]:
         delta_msg = (
@@ -135,6 +151,16 @@ def main():
             output["warnings"].append(rev_warning)
             if not rev_valid:
                 output["valid"] = False
+
+    # Optional: CR6 — file coverage check (Development domain / @code-reviewer)
+    if args.check_file_coverage:
+        files = [f.strip() for f in args.check_file_coverage.split(",") if f.strip()]
+        cov_valid, cov_missing, cov_warnings = validate_file_coverage(review_path, files)
+        output["file_coverage_valid"] = cov_valid
+        output["missing_files"] = cov_missing
+        output["warnings"].extend(cov_warnings)
+        if not cov_valid:
+            output["valid"] = False
 
     # Optional: sequence validation
     if args.check_sequence:

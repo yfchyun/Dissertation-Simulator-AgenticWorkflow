@@ -49,6 +49,10 @@ def main():
         "--check-pacs", action="store_true",
         help="Also validate step pACS arithmetic (T9)"
     )
+    parser.add_argument(
+        "--cross-check", action="store_true",
+        help="Also run VE1-VE5 criteria-evidence cross-check (P1 hallucination detection)"
+    )
     args = parser.parse_args()
 
     project_dir = os.path.abspath(args.project_dir)
@@ -62,6 +66,8 @@ def main():
         "V1a": f"Create verification log: verify each criterion → record PASS/FAIL with evidence → save to verification-logs/step-{step}-verify.md",
         "V1b": "Add per-criterion results: each Verification criterion must have explicit PASS or FAIL with evidence",
         "V1c": "Fix logical inconsistency: if any criterion is FAIL, overall result cannot be PASS. Correct the failed criteria or change overall to FAIL",
+        "V1d": "Provide substantive evidence (≥ 20 chars) for each criterion: include specific data (file paths, counts, measurements) instead of brief words like 'ok' or 'checked'",
+        "V1e": "Split compound criterion into atomic criteria: each criterion should verify a single action (EVP-1 Atomic Verification Criteria)",
     }
 
     # Build output
@@ -75,6 +81,38 @@ def main():
     remediations = extract_remediations(warnings, _REMEDIATIONS)
     if remediations:
         output["remediations"] = remediations
+
+    # H4: Optional VE1-VE5 criteria-evidence cross-check (P1 hallucination detection)
+    if args.cross_check:
+        import subprocess
+        ve_script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "validate_criteria_evidence.py"
+        )
+        if os.path.exists(ve_script):
+            ve_cmd = [
+                sys.executable, ve_script,
+                "--step", str(step),
+                "--project-dir", project_dir,
+            ]
+            try:
+                ve_proc = subprocess.run(
+                    ve_cmd, capture_output=True, text=True, timeout=30
+                )
+                if ve_proc.stdout.strip():
+                    ve_result = json.loads(ve_proc.stdout)
+                    output["cross_check"] = ve_result
+                    hallucinations = ve_result.get("hallucinations_detected", 0)
+                    if hallucinations > 0:
+                        output["warnings"].append(
+                            f"VE CROSS-CHECK: {hallucinations} hallucination(s) "
+                            f"detected by criteria-evidence validator"
+                        )
+                        output["valid"] = False
+            except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
+                output["warnings"].append(
+                    "VE CROSS-CHECK: Failed to run validate_criteria_evidence.py"
+                )
 
     # Optional: T9 — pACS arithmetic check for this step
     if args.check_pacs:

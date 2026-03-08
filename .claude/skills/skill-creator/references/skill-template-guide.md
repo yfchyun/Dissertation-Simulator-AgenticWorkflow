@@ -46,7 +46,11 @@ Define at minimum:
 
 Optional:
 - **L1.5 (pACS)**: Self-assessment scoring
-- **L2 (Calibration)**: External review
+- **L2 (Adversarial Review)**: Independent critic agent — `Review:` field in workflow step
+  - Research domain: `@fact-checker` + `@reviewer` (parallel)
+  - Development domain: `@code-reviewer`
+  - On Review FAIL: triggers **Adversarial Dialogue** (Generator-Critic iteration loop)
+  - `Dialogue:` field sets domain + max_rounds; P1 validators: DA1-DA5, CI1-CI4
 
 ### 4. References Directory
 

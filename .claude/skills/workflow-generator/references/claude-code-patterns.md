@@ -119,7 +119,7 @@ permissionMode: plan
 여러 독립 세션이 협업하는 팀 기반 병렬 작업 시스템.
 Sub-agent와 달리 각 팀원이 완전히 독립된 컨텍스트를 가짐.
 
-> **실험적 기능** — `settings.json`에서 활성화 필요
+> **지원 기능** — `settings.json`에서 환경변수로 활성화. 환경변수명에 `EXPERIMENTAL`이 포함되어 있으나, 이는 CLI 내부 네이밍 관례이며 기능 안정성과 무관하다.
 
 ```json
 // settings.json
@@ -129,6 +129,18 @@ Sub-agent와 달리 각 팀원이 완전히 독립된 컨텍스트를 가짐.
   }
 }
 ```
+
+#### Agent Swarm Conceptual Frame
+
+Agent Team은 **Agent Swarm** 패턴의 구현체다. Swarm의 핵심 원리 3가지와 본 프레임워크의 대응:
+
+| Swarm 원리 | 본 프레임워크 구현 | 근거 |
+|-----------|-----------------|------|
+| **AI-managed coordination** — Coordinator가 작업을 분해하고 적절한 에이전트에 할당 | Team Lead(=Orchestrator)가 TaskCreate/SendMessage로 조율. 하위 §Task Management 참조 | 절대 기준 2 (단일 SOT + 계층적 메모리) |
+| **Independent context windows** — 각 에이전트가 200K 토큰의 격리된 컨텍스트 보유 | Teammate마다 독립 세션. 공유 상태는 SOT(state.yaml)만 경유 | RLM P1 — 에이전트 간 직접 상태 공유는 비결정론적 |
+| **Task graph with dependencies** — blocks/blockedBy로 병렬·순차 실행 제어 | Design-time에 workflow.md에서 선언. Runtime 동적 의존성 탐지 금지 (P1 위반) | 하위 §TaskUpdate — 상태 관리 및 의존성 참조 |
+
+> **품질 전용 판단 기준**: Agent Team 선택은 속도·비용이 아닌 **결과물 품질 향상 여부**만으로 결정한다. 하위 §Sub-agent vs Agent Team — 품질 기준 선택 참조.
 
 **아키텍처:**
 

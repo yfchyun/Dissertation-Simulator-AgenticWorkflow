@@ -1,0 +1,24 @@
+[tool.mypy]
+python_version = "3.14"
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+no_error_summary = true
+
+# Phase 1 완료 파일 — strict 적용 (점진적 확장)
+[[tool.mypy.overrides]]
+module = [
+    "validate_claim_inheritance",
+    "validate_dialogue_state",
+    "validate_criteria_evidence",
+    "verify_translation_terms",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+strict_optional = true
+
+# Phase 3 대상 (스타일 정합 완료 후 strict 전환)
+# [[tool.mypy.overrides]]
+# module = ["validate_fork_safety", "detect_self_plagiarism", "check_format_consistency"]
+# disallow_untyped_defs = true

@@ -26,6 +26,7 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -55,6 +56,12 @@ VALID_INPUT_MODES = {"A", "B", "C", "D", "E", "F", "G"}
 
 # Valid execution modes (from start.md Step 3.5 mode selection)
 VALID_EXECUTION_MODES = {"interactive", "autopilot", "ulw", "autopilot+ulw"}
+
+# Valid dialogue domains
+VALID_DIALOGUE_DOMAINS = {"research", "development"}
+
+# Valid dialogue outcomes
+VALID_DIALOGUE_OUTCOMES = {"consensus", "escalated"}
 
 # GroundedClaim types (from workflow.md GRA spec)
 VALID_CLAIM_TYPES = {
@@ -268,6 +275,34 @@ def validate_thesis_sot(data: dict) -> list[str]:
                     if gate_status not in {"pass", "fail", "pending", None}:
                         errors.append(f"TS9: gates['{gate_name}'].status invalid: '{gate_status}'")
 
+    # TS11 — execution_mode (already handled above as TS11 in some versions)
+
+    # TS12: Optional dialogue_state validation (S9-equivalent)
+    dialogue_state = data.get("dialogue_state")
+    if dialogue_state is not None:
+        if not isinstance(dialogue_state, dict):
+            errors.append("TS12: dialogue_state must be a dict")
+        else:
+            ds_step = dialogue_state.get("step")
+            if ds_step is not None and (not isinstance(ds_step, int) or ds_step < 0):
+                errors.append(f"TS12a: dialogue_state.step must be non-negative int, got {ds_step}")
+            ds_rounds = dialogue_state.get("rounds_used")
+            if ds_rounds is not None and (not isinstance(ds_rounds, int) or ds_rounds < 0):
+                errors.append(f"TS12b: dialogue_state.rounds_used must be non-negative int, got {ds_rounds}")
+            ds_max = dialogue_state.get("max_rounds")
+            if ds_max is not None and (not isinstance(ds_max, int) or ds_max < 1):
+                errors.append(f"TS12c: dialogue_state.max_rounds must be positive int, got {ds_max}")
+            ds_status = dialogue_state.get("status")
+            valid_statuses = {"in_progress", "consensus", "escalated", "not_started"}
+            if ds_status is not None and ds_status not in valid_statuses:
+                errors.append(f"TS12d: dialogue_state.status invalid: '{ds_status}', must be {valid_statuses}")
+            ds_domain = dialogue_state.get("domain")
+            if ds_domain is not None and ds_domain not in VALID_DIALOGUE_DOMAINS:
+                errors.append(f"TS12e: dialogue_state.domain invalid: '{ds_domain}', must be {VALID_DIALOGUE_DOMAINS}")
+            ds_outcome = dialogue_state.get("outcome")
+            if ds_outcome is not None and ds_outcome not in VALID_DIALOGUE_OUTCOMES:
+                errors.append(f"TS12f: dialogue_state.outcome invalid: '{ds_outcome}', must be {VALID_DIALOGUE_OUTCOMES}")
+
     # TS10
     for ts_field in ("created_at", "updated_at"):
         ts_val = data.get(ts_field)
@@ -322,6 +357,14 @@ def validate_thesis_sot(data: dict) -> list[str]:
                 if not isinstance(team, dict):
                     errors.append(f"TS13: completed_teams[{i}] must be a dict")
 
+    # TS14: execution_substep must be None or a non-empty string (if present)
+    exec_substep = data.get("execution_substep")
+    if exec_substep is not None:
+        if not isinstance(exec_substep, str) or not exec_substep.strip():
+            errors.append(
+                f"TS14: execution_substep must be None or a non-empty string, got {exec_substep!r}"
+            )
+
     return errors
 
 
@@ -373,7 +416,19 @@ def read_thesis_sot(project_dir: Path) -> dict:
 
 
 def write_thesis_sot(project_dir: Path, data: dict) -> None:
-    """Validate and atomically write thesis SOT."""
+    """Validate and atomically write thesis SOT.
+
+    Authorization: Only Orchestrator (main session) may write.
+    Teammates are blocked to prevent SOT corruption (Absolute Standard 2).
+    """
+    # Internal auth check — defense-in-depth beyond guard_sot_write.py
+    is_teammate = os.environ.get("CLAUDE_AGENT_TEAMS_TEAMMATE", "") != ""
+    if is_teammate:
+        raise PermissionError(
+            "SOT write denied: teammates cannot write thesis SOT directly. "
+            "Report results to Team Lead via SendMessage."
+        )
+
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     errors = validate_thesis_sot(data)
@@ -429,6 +484,7 @@ def create_initial_sot(
         "completed_teams": [],
         "fallback_history": [],
         "context_snapshots": [],
+        "execution_substep": None,  # Current sub-step within active step (e.g. "L1_verification")
         "created_at": now,
         "updated_at": now,
     }
@@ -726,6 +782,7 @@ def init_project(project_dir: Path, project_name: str, **kwargs) -> dict:
         "verification-logs",
         "pacs-logs",
         "review-logs",
+        "dialogue-logs",
         "fallback-logs",
         CHECKPOINTS_DIR,
         "user-resource",
@@ -887,12 +944,100 @@ def advance_step(project_dir: Path, target_step: int, force: bool = False) -> di
                 + "\n".join(f"  - {u}" for u in unmet)
             )
 
+    # VE-Gate: Run validate_criteria_evidence before advancing (non-blocking warn)
+    # Detects hallucinated evidence in verification logs before step is committed.
+    # Exit 0 always (P1 compliant) — warn only if hallucinations_detected >= 1.
+    _warn_if_hallucinations(project_dir, current)
+
     sot["current_step"] = target_step
+    sot["execution_substep"] = None  # Clear sub-step on step advance
     write_thesis_sot(project_dir, sot)
 
     # Update checklist markdown
     _sync_checklist(project_dir, sot)
 
+    return sot
+
+
+def _warn_if_hallucinations(project_dir: Path, step: int) -> None:
+    """Run validate_criteria_evidence.py for the step being advanced.
+
+    Blocking with 15-second timeout: subprocess.run() is synchronous. The
+    advance_step() call waits up to 15 seconds for this check to complete.
+    Always returns None regardless of outcome (advance proceeds unconditionally).
+    Prints WARNING to stderr if hallucinations_detected >= 1.
+    Skips silently if the script is missing or verification-logs are absent.
+
+    Intentional design: blocking ensures the hallucination check runs BEFORE
+    the SOT is updated. The 15-second timeout prevents indefinite blocking.
+
+    P1 Compliance: subprocess call — deterministic, no LLM.
+    SOT Compliance: read-only (validate_criteria_evidence never writes SOT).
+    """
+    if step <= 0:
+        return
+
+    script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "validate_criteria_evidence.py",
+    )
+    if not os.path.exists(script):
+        return
+
+    verify_log = os.path.join(
+        str(project_dir), "verification-logs", f"step-{step}-verify.md"
+    )
+    if not os.path.exists(verify_log):
+        return  # No verification log for this step — skip silently
+
+    try:
+        result = subprocess.run(
+            [sys.executable, script, "--step", str(step),
+             "--project-dir", str(project_dir), "--auto-detect"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout)
+            n_hall = data.get("hallucinations_detected", 0)
+            if n_hall >= 1:
+                print(
+                    f"[VE-Gate WARNING] Step {step}: {n_hall} hallucinated evidence "
+                    f"claim(s) detected by validate_criteria_evidence. "
+                    f"Review before accepting this step advance.",
+                    file=sys.stderr,
+                )
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+        pass  # Non-blocking — advance proceeds regardless
+
+
+def set_execution_substep(project_dir: Path, substep: str | None) -> dict:
+    """Record the current sub-step within the active step in SOT.
+
+    Called by Orchestrator at each sub-step boundary so context recovery
+    can resume from the exact sub-step rather than restarting the full step.
+
+    Args:
+        project_dir: Thesis project directory
+        substep: Sub-step identifier (e.g. "L0_antiskip", "L1_verification",
+                 "L1_5_pacs", "L2_dialogue_round_2", "translation", "advance")
+                 or None to clear (after step advance completes).
+
+    Valid substep identifiers:
+        None          — cleared after step advance (no active substep)
+        "L0_antiskip" — running L0 file-existence check
+        "L1_verification" — running L1 Verification Gate
+        "L1_5_pacs"   — running L1.5 pACS self-rating
+        "L2_review"   — running single-pass @reviewer
+        "L2_dialogue_round_{K}" — Adversarial Dialogue Round K in progress
+        "translation" — running @translator
+        "advance"     — about to call --advance
+
+    SOT Compliance: Single writer (Orchestrator only). Atomically updated.
+    P1 Compliance: Pure string assignment — deterministic.
+    """
+    sot = read_thesis_sot(project_dir)
+    sot["execution_substep"] = substep
+    write_thesis_sot(project_dir, sot)
     return sot
 
 
@@ -1317,6 +1462,117 @@ def get_translation_progress(project_dir: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Dialogue State Management
+# ---------------------------------------------------------------------------
+
+def start_dialogue(project_dir, step: int, domain: str, max_rounds: int = 10) -> dict:
+    """Initialize dialogue_state in SOT when Adversarial Dialogue loop begins.
+
+    P1 Compliance: Atomic write via write_thesis_sot.
+    SOT Compliance: Single-writer pattern enforced (Orchestrator only).
+
+    Args:
+        project_dir: Thesis project directory
+        step: Workflow step number
+        domain: "research" or "development"
+        max_rounds: Maximum dialogue rounds (default: 10)
+
+    Returns:
+        Updated SOT dict
+    """
+    if domain not in VALID_DIALOGUE_DOMAINS:
+        raise ValueError(f"Invalid domain '{domain}', must be one of {VALID_DIALOGUE_DOMAINS}")
+
+    project_dir = Path(project_dir)
+    # Create dialogue-logs/ directory if needed
+    (project_dir / "dialogue-logs").mkdir(parents=True, exist_ok=True)
+
+    sot = read_thesis_sot(project_dir)
+    sot["dialogue_state"] = {
+        "step": step,
+        "domain": domain,
+        "status": "in_progress",
+        "rounds_used": 0,
+        "max_rounds": max_rounds,
+        "round_history": [],
+    }
+    sot["updated_at"] = datetime.now(timezone.utc).isoformat()
+    write_thesis_sot(project_dir, sot)
+    return sot
+
+
+def advance_dialogue_round(project_dir, step: int, round_num: int, verdict: str) -> dict:
+    """Record completion of one dialogue round in SOT.
+
+    P1 Compliance: Atomic write via write_thesis_sot.
+
+    Args:
+        project_dir: Thesis project directory
+        step: Workflow step number
+        round_num: Round number (1-based)
+        verdict: "PASS" or "FAIL"
+
+    Returns:
+        Updated SOT dict
+    """
+    verdict = verdict.upper()
+    if verdict not in ("PASS", "FAIL"):
+        raise ValueError(f"Invalid verdict '{verdict}', must be PASS or FAIL")
+
+    project_dir = Path(project_dir)
+    sot = read_thesis_sot(project_dir)
+
+    ds = sot.get("dialogue_state")
+    if ds is None:
+        raise ValueError("No active dialogue_state found. Call --dialogue-start first.")
+    if ds.get("step") != step:
+        raise ValueError(f"Active dialogue is for step {ds.get('step')}, not step {step}")
+
+    ds["rounds_used"] = round_num
+    ds["round_history"].append({
+        "round": round_num,
+        "verdict": verdict,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    sot["updated_at"] = datetime.now(timezone.utc).isoformat()
+    write_thesis_sot(project_dir, sot)
+    return sot
+
+
+def end_dialogue(project_dir, step: int, outcome: str) -> dict:
+    """Finalize dialogue_state in SOT after loop completes.
+
+    P1 Compliance: Atomic write via write_thesis_sot.
+
+    Args:
+        project_dir: Thesis project directory
+        step: Workflow step number
+        outcome: "consensus" or "escalated"
+
+    Returns:
+        Updated SOT dict
+    """
+    if outcome not in VALID_DIALOGUE_OUTCOMES:
+        raise ValueError(f"Invalid outcome '{outcome}', must be one of {VALID_DIALOGUE_OUTCOMES}")
+
+    project_dir = Path(project_dir)
+    sot = read_thesis_sot(project_dir)
+
+    ds = sot.get("dialogue_state")
+    if ds is None:
+        raise ValueError("No active dialogue_state found. Call --dialogue-start first.")
+    if ds.get("step") != step:
+        raise ValueError(f"Active dialogue is for step {ds.get('step')}, not step {step}")
+
+    ds["status"] = outcome  # "consensus" or "escalated"
+    ds["outcome"] = outcome
+    ds["completed_at"] = datetime.now(timezone.utc).isoformat()
+    sot["updated_at"] = datetime.now(timezone.utc).isoformat()
+    write_thesis_sot(project_dir, sot)
+    return sot
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1517,6 +1773,11 @@ def main():
     group.add_argument("--record-output", action="store_true", help="Record step output path in SOT")
     group.add_argument("--record-translation", action="store_true", help="Record translation output in SOT")
     group.add_argument("--translation-progress", action="store_true", help="Show translation coverage")
+    group.add_argument("--dialogue-start", action="store_true", help="Start Adversarial Dialogue loop for a step")
+    group.add_argument("--dialogue-round", action="store_true", help="Record completion of one dialogue round")
+    group.add_argument("--dialogue-end", action="store_true", help="Finalize dialogue loop with outcome")
+    group.add_argument("--set-substep", metavar="SUBSTEP", help="Record current execution sub-step within active step (e.g. L1_verification, L2_dialogue_round_2); use 'clear' to reset")
+    group.add_argument("--update-pccs-cal", action="store_true", help="Update pCCS calibration data in SOT")
 
     parser.add_argument("--project-name", help="Project name (default: directory name)")
     parser.add_argument("--research-type", choices=sorted(VALID_RESEARCH_TYPES))
@@ -1538,6 +1799,13 @@ def main():
     parser.add_argument("--report-path", help="Path to gate report JSON (for --record-gate)")
     parser.add_argument("--output-path", help="Output file path (for --record-output)")
     parser.add_argument("--ko-path", help="Korean translation path (for --record-translation)")
+    parser.add_argument("--domain", choices=sorted(VALID_DIALOGUE_DOMAINS), help="Dialogue domain (for --dialogue-start)")
+    parser.add_argument("--max-rounds", type=int, default=10, help="Max dialogue rounds (for --dialogue-start, default: 10)")
+    parser.add_argument("--round", type=int, help="Round number (for --dialogue-round)")
+    parser.add_argument("--verdict", choices=["PASS", "FAIL"], help="Round verdict (for --dialogue-round)")
+    parser.add_argument("--outcome", choices=sorted(VALID_DIALOGUE_OUTCOMES), help="Dialogue outcome (for --dialogue-end)")
+    parser.add_argument("--pccs-report", help="Path to pccs-report.json (for --update-pccs-cal)")
+    parser.add_argument("--pccs-cal", help="Path to pccs-calibration.json (for --update-pccs-cal)")
 
     args = parser.parse_args()
 
@@ -1571,6 +1839,177 @@ def main():
         return _cli_record_translation(args)
     elif args.translation_progress:
         return _cli_translation_progress(args)
+    elif args.dialogue_start:
+        return _cli_dialogue_start(args)
+    elif args.dialogue_round:
+        return _cli_dialogue_round(args)
+    elif args.dialogue_end:
+        return _cli_dialogue_end(args)
+    elif args.set_substep is not None:
+        return _cli_set_substep(args)
+    elif args.update_pccs_cal:
+        return _cli_update_pccs_cal(args)
+
+
+def _cli_dialogue_start(args) -> int:
+    """Handle --dialogue-start command."""
+    project_dir = Path(args.project_dir)
+    step = args.step
+    domain = args.domain or "research"
+    max_rounds = getattr(args, "max_rounds", 10) or 10
+
+    if step is None:
+        print("ERROR: --dialogue-start requires --step N", file=sys.stderr)
+        return 1
+
+    try:
+        sot = start_dialogue(project_dir, step, domain, max_rounds)
+        print(f"Dialogue started: step={step}, domain={domain}, max_rounds={max_rounds}")
+        print(f"  SOT updated: dialogue_state.status=in_progress")
+    except (FileNotFoundError, ValueError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cli_dialogue_round(args) -> int:
+    """Handle --dialogue-round command."""
+    project_dir = Path(args.project_dir)
+    step = args.step
+    round_num = getattr(args, "round", None)
+    verdict = getattr(args, "verdict", None)
+
+    if step is None or round_num is None or verdict is None:
+        print("ERROR: --dialogue-round requires --step N --round K --verdict PASS|FAIL", file=sys.stderr)
+        return 1
+
+    try:
+        sot = advance_dialogue_round(project_dir, step, round_num, verdict)
+        ds = sot.get("dialogue_state", {})
+        print(f"Dialogue round recorded: step={step}, round={round_num}, verdict={verdict}")
+        print(f"  Rounds used: {ds.get('rounds_used', '?')} / {ds.get('max_rounds', '?')}")
+    except (FileNotFoundError, ValueError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cli_dialogue_end(args) -> int:
+    """Handle --dialogue-end command."""
+    project_dir = Path(args.project_dir)
+    step = args.step
+    outcome = getattr(args, "outcome", None)
+
+    if step is None or outcome is None:
+        print("ERROR: --dialogue-end requires --step N --outcome consensus|escalated", file=sys.stderr)
+        return 1
+
+    try:
+        sot = end_dialogue(project_dir, step, outcome)
+        ds = sot.get("dialogue_state", {})
+        print(f"Dialogue ended: step={step}, outcome={outcome}")
+        print(f"  Rounds used: {ds.get('rounds_used', '?')} / {ds.get('max_rounds', '?')}")
+    except (FileNotFoundError, ValueError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cli_set_substep(args) -> int:
+    """Handle --set-substep SUBSTEP command.
+
+    Records the current sub-step within the active step in session.json.
+    Use 'clear' as SUBSTEP value to reset (after step advance completes).
+    """
+    project_dir = Path(args.project_dir)
+    raw = args.set_substep
+    substep = None if raw == "clear" else raw
+
+    try:
+        sot = set_execution_substep(project_dir, substep)
+        label = f"'{substep}'" if substep else "cleared"
+        print(f"execution_substep set to {label} (step {sot.get('current_step', '?')})")
+    except FileNotFoundError:
+        print(f"Thesis SOT not found at: {project_dir}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cli_update_pccs_cal(args) -> int:
+    """Handle --update-pccs-cal command.
+
+    Updates the pCCS block in session.json with calibration data and
+    the latest report summary. Safe SOT write via write_thesis_sot().
+    """
+    project_dir = Path(args.project_dir)
+    pccs_report_path = getattr(args, "pccs_report", None)
+    pccs_cal_path = getattr(args, "pccs_cal", None)
+
+    try:
+        sot = read_thesis_sot(project_dir)
+    except FileNotFoundError:
+        print(f"Thesis SOT not found at: {project_dir}", file=sys.stderr)
+        return 1
+
+    # Initialize pccs block if absent
+    if "pccs" not in sot:
+        sot["pccs"] = {
+            "cal_delta": 0.0,
+            "last_step": None,
+            "total_cal_samples": 0,
+            "history": {},
+        }
+
+    pccs = sot["pccs"]
+
+    # Update from calibration file
+    if pccs_cal_path and os.path.exists(pccs_cal_path):
+        try:
+            with open(pccs_cal_path, "r", encoding="utf-8") as f:
+                cal = json.load(f)
+            pccs["cal_delta"] = cal.get("cal_delta", 0.0)
+            pccs["total_cal_samples"] = cal.get("total_samples", 0)
+            print(f"  cal_delta updated: {pccs['cal_delta']}")
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"WARNING: Cannot load calibration: {e}", file=sys.stderr)
+
+    # Update from report file
+    if pccs_report_path and os.path.exists(pccs_report_path):
+        try:
+            with open(pccs_report_path, "r", encoding="utf-8") as f:
+                report = json.load(f)
+            step = report.get("step", -1)
+            summary = report.get("summary", {})
+            decision = report.get("decision", {})
+            pccs["last_step"] = step
+
+            # Record in history
+            step_key = f"step-{step}"
+            pccs["history"][step_key] = {
+                "mean_pccs": summary.get("mean_pccs", 0),
+                "green": summary.get("green", 0),
+                "yellow": summary.get("yellow", 0),
+                "red": summary.get("red", 0),
+                "action": decision.get("action", "unknown"),
+            }
+            print(
+                f"  step-{step}: mean={summary.get('mean_pccs', 0)}, "
+                f"action={decision.get('action', '?')}"
+            )
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"WARNING: Cannot load report: {e}", file=sys.stderr)
+
+    try:
+        write_thesis_sot(project_dir, sot)
+        print(f"pCCS SOT updated successfully.")
+    except Exception as e:
+        print(f"ERROR writing SOT: {e}", file=sys.stderr)
+        return 1
+
+    return 0
 
 
 def _cli_is_hitl_blocking(args) -> int:

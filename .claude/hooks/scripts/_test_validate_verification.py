@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for validate_verification.py — Verification Gate validation (V1a-V1c).
+"""Tests for validate_verification.py — Verification Gate validation (V1a-V1e).
 
 Run: python3 -m pytest _test_validate_verification.py -v
   or: python3 _test_validate_verification.py
@@ -75,20 +75,20 @@ class TestGenerateVerificationLog(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir)
 
-    def test_generated_log_passes_v1a_v1c(self):
-        """Generated log must pass validate_verification_log() (V1a-V1c)."""
+    def test_generated_log_passes_v1a_v1e(self):
+        """Generated log must pass validate_verification_log() (V1a-V1e)."""
         from _context_lib import generate_verification_log, validate_verification_log
 
         content = generate_verification_log(42, [
-            {"criterion": "L0: Output exists", "result": "PASS", "evidence": "file.md, 2048 bytes"},
-            {"criterion": "pACS above threshold", "result": "PASS", "evidence": "pACS = 75"},
-            {"criterion": "GroundedClaim compliance", "result": "PASS", "evidence": "12 claims"},
+            {"criterion": "L0: Output exists", "result": "PASS", "evidence": "file.md exists, 2048 bytes on disk"},
+            {"criterion": "pACS above threshold", "result": "PASS", "evidence": "pACS = 75, GREEN zone (F=80, C=75, L=82)"},
+            {"criterion": "GroundedClaim compliance", "result": "PASS", "evidence": "12 claims validated, all with source refs"},
         ])
         path = self.verify_dir / "step-42-verify.md"
         path.write_text(content, encoding="utf-8")
 
         is_valid, warnings = validate_verification_log(str(self.tmpdir), 42)
-        self.assertTrue(is_valid, f"Generated log should pass V1a-V1c: {warnings}")
+        self.assertTrue(is_valid, f"Generated log should pass V1a-V1e: {warnings}")
 
     def test_auto_derives_fail(self):
         """If any criterion is FAIL, overall must be FAIL."""
@@ -135,6 +135,109 @@ class TestGenerateVerificationLog(unittest.TestCase):
         content = generate_verification_log(1, [])
         self.assertIn("# Verification Log", content)
         self.assertIn("## Overall Result: PASS", content)
+
+
+class TestV1dEvidenceQuality(unittest.TestCase):
+    """Test V1d: Evidence must be >= 20 chars to prevent lazy verification."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.verify_dir = self.tmpdir / "verification-logs"
+        self.verify_dir.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_short_evidence_triggers_v1d_fail(self):
+        """Evidence shorter than 20 chars should trigger V1d FAIL."""
+        from _context_lib import validate_verification_log
+
+        content = (
+            "# Verification Log — Step 1\n\n"
+            "| Criterion | Result | Evidence |\n"
+            "|-----------|--------|----------|\n"
+            "| Data collected | PASS | ok |\n\n"
+            "## Overall Result: PASS\n"
+        )
+        (self.verify_dir / "step-1-verify.md").write_text(content)
+        is_valid, warnings = validate_verification_log(str(self.tmpdir), 1)
+        self.assertFalse(is_valid)
+        self.assertTrue(any("V1d FAIL" in w for w in warnings))
+
+    def test_substantive_evidence_passes_v1d(self):
+        """Evidence >= 20 chars should pass V1d."""
+        from _context_lib import validate_verification_log
+
+        content = (
+            "# Verification Log — Step 1\n\n"
+            "| Criterion | Result | Evidence |\n"
+            "|-----------|--------|----------|\n"
+            "| Data collected from 3 sources | PASS | 5 rows from source A, 4 rows from source B, 3 rows from source C |\n\n"
+            "## Overall Result: PASS\n"
+        )
+        (self.verify_dir / "step-1-verify.md").write_text(content)
+        is_valid, warnings = validate_verification_log(str(self.tmpdir), 1)
+        self.assertTrue(is_valid, f"Substantive evidence should pass: {warnings}")
+
+    def test_checklist_format_skips_v1d(self):
+        """V1d only applies to table format (evidence column). Checklist has no evidence column."""
+        from _context_lib import validate_verification_log
+
+        content = (
+            "# Verification Log — Step 1\n\n"
+            "- [x] Data collected: PASS\n"
+            "- [x] Format valid: PASS\n\n"
+            "## Overall Result: PASS\n"
+        )
+        (self.verify_dir / "step-1-verify.md").write_text(content)
+        is_valid, warnings = validate_verification_log(str(self.tmpdir), 1)
+        # No V1d warnings for checklist format (no evidence column to check)
+        self.assertFalse(any("V1d" in w for w in warnings))
+
+
+class TestV1eCompoundCriteria(unittest.TestCase):
+    """Test V1e: Compound criteria detection (WARNING only)."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.verify_dir = self.tmpdir / "verification-logs"
+        self.verify_dir.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_compound_criterion_triggers_v1e_warning(self):
+        """Criteria with 'and' conjunction should trigger V1e WARNING."""
+        from _context_lib import validate_verification_log
+
+        content = (
+            "# Verification Log — Step 1\n\n"
+            "| Criterion | Result | Evidence |\n"
+            "|-----------|--------|----------|\n"
+            "| Data collected and analysis complete | PASS | collected 5 rows and produced comparison table |\n\n"
+            "## Overall Result: PASS\n"
+        )
+        (self.verify_dir / "step-1-verify.md").write_text(content)
+        is_valid, warnings = validate_verification_log(str(self.tmpdir), 1)
+        # V1e is WARNING only — should NOT cause is_valid=False
+        self.assertTrue(is_valid, f"V1e warning should not invalidate: {warnings}")
+        self.assertTrue(any("V1e WARNING" in w for w in warnings))
+
+    def test_atomic_criterion_no_v1e_warning(self):
+        """Atomic criteria without conjunctions should not trigger V1e."""
+        from _context_lib import validate_verification_log
+
+        content = (
+            "# Verification Log — Step 1\n\n"
+            "| Criterion | Result | Evidence |\n"
+            "|-----------|--------|----------|\n"
+            "| Source A data >= 3 rows | PASS | 5 rows collected from source A endpoint |\n\n"
+            "## Overall Result: PASS\n"
+        )
+        (self.verify_dir / "step-1-verify.md").write_text(content)
+        is_valid, warnings = validate_verification_log(str(self.tmpdir), 1)
+        self.assertTrue(is_valid)
+        self.assertFalse(any("V1e" in w for w in warnings))
 
 
 class TestNoSystemSOTReference(unittest.TestCase):

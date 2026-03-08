@@ -43,7 +43,7 @@ import sys
 # T10: Glossary Adherence Check
 # =============================================================================
 
-def check_glossary_adherence(en_content, ko_content, glossary_path):
+def check_glossary_adherence(en_content: str, ko_content: str, glossary_path: str | None) -> dict[str, object]:
     """Verify every glossary term in the English source has correct Korean mapping.
 
     Algorithm (deterministic):
@@ -88,7 +88,7 @@ def check_glossary_adherence(en_content, ko_content, glossary_path):
     }
 
 
-def _load_glossary(glossary_path):
+def _load_glossary(glossary_path: str | None) -> dict[str, str]:
     """Load glossary.yaml as a dict. Handles the simple key-value YAML format.
 
     Format: "English term": "Korean translation"
@@ -142,7 +142,7 @@ _EXCLUDED_NUMBERS = frozenset({
 })
 
 
-def check_number_preservation(en_content, ko_content):
+def check_number_preservation(en_content: str, ko_content: str) -> dict[str, object]:
     """Verify all significant numbers in English source appear in Korean translation.
 
     Algorithm (deterministic):
@@ -174,12 +174,12 @@ def check_number_preservation(en_content, ko_content):
     }
 
 
-def _extract_numbers(text):
+def _extract_numbers(text: str) -> list[str]:
     """Extract all number patterns from text."""
     return _NUMBER_PATTERNS.findall(text)
 
 
-def _normalize_number(n):
+def _normalize_number(n: str) -> str:
     """Normalize a number string for comparison."""
     # Remove spaces around operators
     n = re.sub(r'\s+', '', n)
@@ -203,7 +203,7 @@ _CITATION_PATTERNS = [
 ]
 
 
-def check_citation_preservation(en_content, ko_content):
+def check_citation_preservation(en_content: str, ko_content: str) -> dict[str, object]:
     """Verify all citations in English source appear in Korean translation.
 
     Algorithm (deterministic):
@@ -220,16 +220,18 @@ def check_citation_preservation(en_content, ko_content):
     ko_set = set(ko_citations)
 
     missing = sorted(en_set - ko_set)
+    extra = sorted(ko_set - en_set)
 
     return {
         "passed": len(missing) == 0,
         "en_count": len(en_set),
         "ko_count": len(ko_set),
         "missing": list(missing)[:20],
+        "extra": list(extra)[:10],
     }
 
 
-def _extract_citations(text):
+def _extract_citations(text: str) -> list[str]:
     """Extract all citation references from text as normalized strings."""
     citations = []
 
@@ -251,7 +253,7 @@ def _extract_citations(text):
 # Main
 # =============================================================================
 
-def verify_all(en_path, ko_path, glossary_path=None):
+def verify_all(en_path: str, ko_path: str, glossary_path: str | None = None) -> dict[str, object]:
     """Run all deterministic translation checks.
 
     Returns: dict with overall passed status and per-check results.
@@ -286,9 +288,19 @@ def verify_all(en_path, ko_path, glossary_path=None):
             if name == "T10":
                 detail = f" ({result.get('terms_violated', 0)} glossary violations)"
             elif name == "T11":
-                detail = f" ({len(result.get('missing', []))} missing numbers)"
+                _missing = result.get('missing', [])
+                detail = f" ({len(_missing) if isinstance(_missing, list) else 0} missing"
+                _extra = result.get('extra')
+                if _extra and isinstance(_extra, list):
+                    detail += f", {len(_extra)} extra (hallucination risk)"
+                detail += ")"
             elif name == "T12":
-                detail = f" ({len(result.get('missing', []))} missing citations)"
+                _missing = result.get('missing', [])
+                detail = f" ({len(_missing) if isinstance(_missing, list) else 0} missing"
+                _extra = result.get('extra')
+                if _extra and isinstance(_extra, list):
+                    detail += f", {len(_extra)} extra citations (hallucination risk)"
+                detail += ")"
             parts.append(f"{name}: FAIL{detail}")
 
     return {
@@ -304,7 +316,7 @@ def verify_all(en_path, ko_path, glossary_path=None):
     }
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="T10-T12: Deterministic translation term verification (P1 compliant)"
     )

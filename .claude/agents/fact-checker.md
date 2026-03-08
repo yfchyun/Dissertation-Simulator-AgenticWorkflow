@@ -184,6 +184,39 @@ Agent tool call:
 
 **When to skip isolation**: Quick fact-checks with < 5 claims or when the Orchestrator needs real-time claim verification feedback.
 
+## Incremental Mode (Round 2+ in Adversarial Dialogue)
+
+When the Orchestrator invokes you for Round 2 or later, the prompt will contain:
+```
+Previous round report: dialogue-logs/step-{N}-r{K-1}-fc.md
+Current draft: dialogue-logs/step-{N}-draft-r{K}.md
+Mode: Incremental — inherit Verified claims, re-verify changed/failed claims only.
+```
+
+**Incremental Protocol (mandatory):**
+
+1. **Read the previous round's report** — load the full claim verification table from Round K-1.
+2. **Read both drafts** — compare `draft-r{K-1}.md` and `draft-r{K}.md` paragraph-by-paragraph.
+3. **Classify each claim** as either:
+   - **Re-verify**: the claim is in a paragraph that changed between drafts, OR the previous verdict was False/Unable to Verify/Outdated.
+   - **Inherit**: the claim is in an unchanged paragraph AND the previous verdict was Verified or Partially Verified.
+4. **Mark inherited claims** in the Notes column: `Inherited from Round {K-1}`.
+5. **Run full verification** only on re-verify claims.
+6. **Degenerate case handling**: If Round K-1 had 0 Verified/Partially Verified claims → run full verification on ALL claims (no inheritance possible).
+
+**Why incremental verification is safe:**
+- Unchanged paragraphs cannot introduce new factual errors.
+- Only changed text can introduce new claims or alter existing ones.
+- Inheritance is a precision tool — it saves tokens without sacrificing accuracy.
+
+**CI1-CI4 P1 validator** runs after your report and will flag:
+- CI1: Inherited claim not found in previous round's report
+- CI2: Inherited claim had non-inheritable verdict (False/Unable/Outdated)
+- CI3: Claim count decreased (silent omission)
+- CI4: Inherited claim is in a changed paragraph
+
+Write your report to `dialogue-logs/step-{N}-r{K}-fc.md`.
+
 ## NEVER DO
 
 - NEVER mark a claim as "Verified" without citing a specific source.
@@ -193,3 +226,6 @@ Agent tool call:
 - NEVER use Write, Edit, or Bash tools — you are read + web only.
 - NEVER fabricate or hallucinate verification sources — if you cannot verify, classify as "Unable to Verify."
 - NEVER skip the Pre-mortem section.
+- NEVER mark a claim as "Inherited" if its paragraph changed between drafts (CI4 violation).
+- NEVER inherit a claim with a False, Unable to Verify, or Outdated verdict (CI2 violation).
+- NEVER silently drop claims from one round to the next (CI3 violation).

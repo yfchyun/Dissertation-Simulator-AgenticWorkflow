@@ -995,6 +995,29 @@
 - **관련 파일**: `setup_maintenance.py`, `setup_init.py`, `query_workflow.py`, `ccp_ripple_scanner.py`, `CLAUDE.md`, `AGENTS.md`, `AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md`, `DISSERTATION-SIMULATOR-ARCHITECTURE-AND-PHILOSOPHY.md`, `docs/protocols/context-preservation-detail.md`, `README.md`
 - **관련 ADR**: ADR-024 (P1 할루시네이션 봉쇄), ADR-042 (Hub-Spoke 맵), ADR-058 (CCP MANDATORY + P1 의존성 스캐너)
 
+### ADR-062: Agent Swarm 개념 프레임 통합 + SOT 보호 확장 + Context Memory 대칭화
+
+- **날짜**: 2026-03-07
+- **상태**: Accepted
+- **맥락**: Agent Team(Swarm) 패턴이 ADR-021에서 도입되었으나, (1) Agent Swarm의 3원칙(AI-managed coordination, independent context windows, task graph dependencies)이 명시적으로 문서화되지 않았고, (2) guard_sot_write.py가 논문 SOT(session.json)만 보호하고 시스템 SOT(state.yaml)는 미보호, (3) save_context.py의 SessionEnd 스냅샷에 Thesis 상태가 누락되어 컨텍스트 복원 시 정보 손실, (4) AGENTS.md의 Task Lifecycle에 blockedBy 처리 절차 누락.
+- **결정**:
+  1. **Agent Swarm Conceptual Frame**: claude-code-patterns.md §2에 Swarm 3원칙 ↔ 프레임워크 구현 매핑 테이블 추가
+  2. **SOT 보호 확장**: guard_sot_write.py에 state.yaml 보호 추가 (is_thesis_sot_path → is_sot_path)
+  3. **Context Memory 대칭화**: save_context.py에 _get_thesis_state_summary() 추가 → SessionEnd 스냅샷에 논문 상태 포함
+  4. **Task Lifecycle 정렬**: AGENTS.md에 blockedBy 해소 통보 + TaskList 모니터링 + blocks/blockedBy 파라미터 추가
+  5. **문서 동기화**: CLAUDE.md Hook 테이블에 guard_sot_write.py, validate_grounded_claim.py 추가; workflow-template.md에 상태 전이 규칙 추가; USER-MANUAL §6.3 + ARCHITECTURE §4.3에 Agent Swarm 라벨 추가
+- **근거**:
+  - 절대 기준 2(단일 SOT): state.yaml도 SOT이므로 동일한 쓰기 보호 필요
+  - 절대 기준 1(품질): 컨텍스트 복원의 완전성 = 후속 작업 품질의 바닥선
+  - RLM P1 준수: blocks/blockedBy는 Design-time 선언만 허용, Runtime 동적 탐지 금지
+  - 기존 ADR-021 확장: 새 ADR이 아닌 기존 결정의 보완
+- **대안**:
+  - blocks/blockedBy 자동 검증 Hook 신규 작성 → 기각 (Orchestrator의 AI 판단 영역, P1 결정론적 검증 대상 아님)
+  - state.yaml 자동 갱신 Hook → 기각 (SOT 쓰기는 Orchestrator/Team Lead만 — 절대 기준 2)
+  - 별도 swarm-orchestration.md 프로토콜 문서 생성 → 기각 (6개 파일 파급, 기존 patterns.md에 통합이 최소 침습)
+- **파급 효과**: claude-code-patterns.md, workflow-template.md, AGENTS.md, guard_sot_write.py, save_context.py, CLAUDE.md, AGENTICWORKFLOW-USER-MANUAL.md, AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md
+- **관련 ADR**: ADR-021 (Agent Team 2계층 SOT), ADR-006 (단일 파일 SOT), ADR-060 (Context Memory 품질 최적화)
+
 ---
 
 ## 문서 관리

@@ -75,26 +75,32 @@ AgenticWorkflow/
 ├── AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md         ← 부모 프레임워크 설계 철학
 ├── docs/protocols/                  ← 상세 프로토콜 (on-demand 참조)
 │   ├── autopilot-execution.md       (워크플로우 실행 체크리스트 + NEVER DO)
-│   ├── quality-gates.md             (L0-L2 4계층 + P1 검증 14항목 상세)
+│   ├── quality-gates.md             (L0-L2 5계층 + L1.7 pCCS + P1 검증 24항목 상세)
 │   ├── ulw-mode.md                  (ULW 강화 규칙 3개 + 런타임 메커니즘)
 │   ├── context-preservation-detail.md (Hook 내부 메커니즘 + D-7 인스턴스)
 │   └── code-change-protocol.md      (CCP 3단계 + CAP + 비례성 규칙)
 ├── .claude/
 │   ├── settings.json                ← Hook 설정
-│   ├── agents/                      ← Sub-agent 정의 (53개: 기반 5 + 논문 48)
+│   ├── agents/                      ← Sub-agent 정의 (58개: 기반 10 + 논문 48)
 │   │   ├── translator.md            (영→한 번역, glossary 기반)
 │   │   ├── translation-verifier.md  (번역 품질 검증, 독립 Layer 2 pACS)
 │   │   ├── reviewer.md              (적대적 리뷰어, Enhanced L2)
-│   │   ├── fact-checker.md          (사실 검증, claim-by-claim)
+│   │   ├── fact-checker.md          (사실 검증, claim-by-claim, Incremental Mode)
+│   │   ├── code-reviewer.md         (개발 도메인 코드 리뷰어, Adversarial Dialogue)
 │   │   ├── micro-verifier.md        (경량 스팟체크, haiku 모델 — RLM micro-verification)
+│   │   ├── failure-predictor.md     (Predictive Debugging Phase B-1 — cross-domain 실패 예측)
+│   │   ├── failure-critic.md        (Predictive Debugging Phase B-2 — 예측 교차 검증, adversarial)
+│   │   ├── claim-quality-evaluator.md (pCCS Phase B-1 — claim 시맨틱 품질 평가, sonnet)
+│   │   ├── claim-quality-critic.md  (pCCS Phase B-2 — claim 품질 적대적 교차 검증, sonnet)
 │   │   ├── thesis-orchestrator.md   (논문 워크플로우 총괄 — Wave/Gate/HITL 관리)
 │   │   └── ... (48개 논문 전문 에이전트 — 문헌 검색·분석·연구 설계·작성·출판)
-│   ├── commands/                    ← Slash Commands (29개: 시스템 2 + 라우터 1 + 논문 26)
+│   ├── commands/                    ← Slash Commands (30개: 시스템 3 + 라우터 1 + 논문 26)
 │   │   ├── start.md                 (/start — 자연어 시작 트리거 → 스마트 라우터)
 │   │   ├── install.md               (/install — Setup Init 검증)
 │   │   ├── maintenance.md           (/maintenance — 건강 검진)
+│   │   ├── predict-failures.md      (/predict-failures — Predictive Debugging 전체 스캔)
 │   │   └── thesis-*.md (26개)       (/thesis-init, /thesis-start, /thesis-status, /thesis-translate 등 — 논문 워크플로우)
-│   ├── hooks/scripts/               ← Hook + 검증 스크립트 (43개 프로덕션 + 2개 모듈 + 23개 테스트)
+│   ├── hooks/scripts/               ← Hook + 검증 스크립트 (57개 프로덕션 + 2개 모듈 + 36개 테스트)
 │   │   ├── context_guard.py         (통합 디스패처)
 │   │   ├── _context_lib.py          (공유 라이브러리 — 파싱·생성·검증·압축)
 │   │   ├── _claim_patterns.py       (Claim ID 정규식 SOT — 모든 스크립트 공유 모듈)
@@ -110,7 +116,7 @@ AgenticWorkflow/
 │   │   ├── validate_domain_knowledge.py (DK1-DK7 도메인 지식)
 │   │   ├── validate_translation.py  (T1-T9 번역 구조 검증)
 │   │   ├── verify_translation_terms.py (T10-T12 번역 용어·숫자·인용 검증 — P1 결정론적)
-│   │   ├── validate_verification.py (V1a-V1c 검증 로그)
+│   │   ├── validate_verification.py (V1a-V1e 검증 로그 — V1d 증거 품질, V1e 복합 기준 탐지)
 │   │   ├── validate_workflow.py     (W1-W9 DNA 유전 검증)
 │   │   ├── validate_retry_budget.py (RB1-RB3 재시도 예산)
 │   │   ├── setup_init.py            (인프라 건강 검증 + SOT 쓰기 안전)
@@ -120,9 +126,10 @@ AgenticWorkflow/
 │   │   ├── predictive_debug_guard.py (위험 파일 경고, exit 0)
 │   │   ├── ccp_ripple_scanner.py    (CCP-2 P1 의존성 자동 발견, exit 0)
 │   │   ├── output_secret_filter.py  (시크릿 탐지, 3-tier 추출, 25+ 패턴, 2-패스 스캔)
+│   │   ├── run_mypy_check.py        (mypy 타입 검증 훅 — Phase 1 strict, 비엄격 warn-only, exit 0)
 │   │   ├── security_sensitive_file_guard.py (보안 민감 파일 경고, 12 패턴)
-│   │   ├── query_workflow.py        (워크플로우 관측성 — dashboard/weakest/retry/blocked/error-trends)
-│   │   ├── checklist_manager.py     (논문 SOT 관리 — init/advance/gate/HITL/checkpoint)
+│   │   ├── query_workflow.py        (워크플로우 관측성 — dashboard/weakest/retry/blocked/error-trends/pccs)
+│   │   ├── checklist_manager.py     (논문 SOT 관리 — init/advance/gate/HITL/checkpoint/set-substep)
 │   │   ├── validate_grounded_claim.py (GroundedClaim 스키마 검증 — 47개 prefix)
 │   │   ├── guard_sot_write.py       (SOT 쓰기 보호 — 병렬 에이전트 충돌 방지)
 │   │   ├── validate_thesis_output.py (논문 산출물 품질 검증)
@@ -140,7 +147,21 @@ AgenticWorkflow/
 │   │   ├── format_grounded_claims.py (GroundedClaim YAML 포맷팅 — P1 결정론적)
 │   │   ├── generate_thesis_outline.py (마크다운 기반 목차 추출 — P1 결정론적)
 │   │   ├── validate_fork_safety.py  (Fork 안전성 P1 검증 — FS-1~FS-5 결정론적, CLI 도구)
-│   │   └── _test_*.py (23개)        (유닛 테스트 — 각 프로덕션 스크립트 대응)
+│   │   ├── validate_criteria_evidence.py (VE1-VE5 할루시네이션 교차 검증 — P1 결정론적, CLI 도구)
+│   │   ├── validate_dialogue_state.py (DA1-DA5 Adversarial Dialogue 상태 검증 — P1 결정론적)
+│   │   ├── validate_claim_inheritance.py (CI1-CI4 Claim 상속 검증 — P1 결정론적, Research 도메인)
+│   │   ├── validate_team_synthesis.py (TS1-TS5 Agent Team 합성 완전성 검증 — P1 결정론적, CLI 도구)
+│   │   ├── validate_agent_dna.py    (DA1-DA7 에이전트 DNA 구조 검증 — P1 결정론적, CLI 도구)
+│   │   ├── scan_code_structure.py   (Predictive Debugging Phase A — F1-F7 코드 구조 스캔, P1 결정론적)
+│   │   ├── extract_json_block.py    (Predictive Debugging Phase B→C 핸드오프 — LLM 응답에서 JSON 결정론적 추출, P1)
+│   │   ├── validate_failure_predictions.py (Predictive Debugging Phase C — FP1-FP7 예측 검증, P1 결정론적)
+│   │   ├── generate_failure_report.py (Predictive Debugging Phase D — 보고서+SOT 생성+H-3 파일 검증, P1 결정론적)
+│   │   ├── compute_pccs_signals.py  (pCCS Phase A — P1 signal 추출, claim-map 생성)
+│   │   ├── validate_pccs_assessment.py (pCCS Phase C — CA1-CA5 LLM 평가 검증, P1 결정론적)
+│   │   ├── generate_pccs_report.py  (pCCS Phase D — P1 합성, 최종 pCCS 점수 계산)
+│   │   ├── validate_pccs_output.py  (pCCS PC1-PC6 구조 검증, P1 결정론적)
+│   │   ├── pccs_calibration.py      (pCCS 교정 delta 계산 — fact-checker/L1 기반, P1 결정론적)
+│   │   └── _test_*.py (36개)        (유닛 테스트 — 각 프로덕션 스크립트 대응)
 │   ├── context-snapshots/           ← 런타임 (gitignored)
 │   └── skills/
 │       ├── workflow-generator/      (워크플로우 설계·생성)
@@ -170,11 +191,14 @@ AgenticWorkflow/
 | PreToolUse (Bash) | `block_destructive_commands.py` | 위험 명령 차단 — 네트워크 유출+시스템 파괴+Git 파괴+치명적 rm (exit 2) |
 | PreToolUse (Edit\|Write) | `block_test_file_edit.py` | TDD 모드 시 테스트 파일 보호 (exit 2) |
 | PreToolUse (Edit\|Write) | `predictive_debug_guard.py` | 에러 이력 기반 위험 파일 경고 |
+| PreToolUse (Edit\|Write) | `guard_sot_write.py` | SOT 쓰기 보호 — Orchestrator/Team Lead만 허용 (exit 2) |
 | PreToolUse (Edit\|Write) | `ccp_ripple_scanner.py` | CCP-2 P1 의존성 자동 발견 (Hub-Spoke, 참조, 테스트, Hook) |
 | SessionStart | `restore_context.py` | RLM 포인터 + 과거 세션 인덱스 + Predictive Debugging 캐시 |
 | PostToolUse (9개 도구) | `update_work_log.py` | 작업 로그 누적 |
 | PostToolUse (Bash\|Read) | `output_secret_filter.py` | 시크릿 탐지 (3-tier 추출, 25+ 패턴, 2-패스 스캔) |
 | PostToolUse (Edit\|Write) | `security_sensitive_file_guard.py` | 보안 민감 파일 수정 경고 |
+| PostToolUse (Edit\|Write) | `run_mypy_check.py` | mypy 타입 검증 — Phase 1 strict / 비엄격 warn-only (exit 0) |
+| PostToolUse (Write) | `validate_grounded_claim.py` | GroundedClaim 스키마 검증 (47개 prefix) |
 | Stop | `generate_context_summary.py` | 증분 스냅샷 + Knowledge Archive + 안전망 |
 | PreCompact | `save_context.py` | 압축 전 스냅샷 저장 |
 | SessionEnd | `save_context.py` | `/clear` 시 전체 스냅샷 저장 |
@@ -222,7 +246,7 @@ AgenticWorkflow/
 
 워크플로우 실행 시 `(human)` 단계와 AskUserQuestion을 자동 승인하는 모드. 상세: `AGENTS.md §5.1`
 
-**4계층 품질 보장**: L0(Anti-Skip Guard) → L1(Verification Gate) → L1.5(pACS Self-Rating) → L2(Calibration). 상세: `docs/protocols/quality-gates.md`
+**5계층 품질 보장**: L0(Anti-Skip Guard) → L1(Verification Gate) → L1.5(pACS Self-Rating) → L1.7(pCCS per-claim confidence) → L2(Calibration). 상세: `docs/protocols/quality-gates.md`
 
 **워크플로우 실행 전 반드시 읽기**: `docs/protocols/autopilot-execution.md` — 단계별 체크리스트 + NEVER DO
 

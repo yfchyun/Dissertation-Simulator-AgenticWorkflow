@@ -1,0 +1,9 @@
+.git/
+node_modules/
+dist/
+build/
+*.log
+thesis-output/
+**/__pycache__/
+.pytest_cache/
+.DS_Store

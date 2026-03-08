@@ -271,6 +271,20 @@ def main():
         )
         sys.exit(2)
 
+    # H8: SOT management script warning for teammates (exit 0 — warning only)
+    # checklist_manager.py has internal auth, but warn as defense-in-depth
+    is_teammate = os.environ.get("CLAUDE_AGENT_TEAMS_TEAMMATE", "") != ""
+    if is_teammate and re.search(
+        r"checklist_manager\.py\b.*--(?:advance|init|gate|hitl|checkpoint)",
+        command,
+    ):
+        print(
+            "SOT WARNING: Teammate calling checklist_manager.py directly.\n"
+            "SOT writes should go through the Team Lead/Orchestrator.\n"
+            "Use SendMessage to report results instead.",
+            file=sys.stderr,
+        )
+
     # No match — allow command to proceed
     sys.exit(0)
 

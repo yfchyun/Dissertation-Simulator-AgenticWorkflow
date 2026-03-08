@@ -134,6 +134,9 @@ def main():
     # Extract brief summary from snapshot
     summary = _extract_brief_summary(snapshot_content)
 
+    # Extract compression audit trail (if snapshot was compressed)
+    compression_note = _extract_compression_audit(snapshot_content)
+
     # Verify SOT consistency
     sot_warning = _verify_sot_consistency(snapshot_content, project_dir)
 
@@ -680,9 +683,408 @@ def _get_quality_gate_trend(ki_path, max_sessions=10):
         return ""
 
 
+def _read_active_thesis_sot(project_dir: str) -> tuple[str | None, dict]:
+    """Shared SOT reader: find + read thesis session.json exactly ONCE.
+
+    Returns (sot_path, sot_data). sot_path is None if no active thesis project
+    found. sot_data is {} on any read error.
+
+    SOT Compliance: Read-only, single-pass — all callers share this one read so
+    they see a consistent snapshot of session.json (no per-function re-reads).
+    DRY: eliminates the duplicated sot_path-finding logic across 4 functions.
+    P1 Compliance: Deterministic JSON read, non-blocking.
+    """
+    if not project_dir:
+        return None, {}
+
+    # Search thesis-output/{proj}/session.json first (standard layout)
+    thesis_output = os.path.join(project_dir, "thesis-output")
+    if os.path.isdir(thesis_output):
+        for entry in sorted(os.listdir(thesis_output)):  # sorted for determinism
+            candidate = os.path.join(thesis_output, entry, "session.json")
+            if os.path.exists(candidate):
+                try:
+                    with open(candidate, "r", encoding="utf-8") as f:
+                        return candidate, json.load(f)
+                except Exception:
+                    return candidate, {}
+
+    # Fallback: session.json directly under project root
+    root_candidate = os.path.join(project_dir, "session.json")
+    if os.path.exists(root_candidate):
+        try:
+            with open(root_candidate, "r", encoding="utf-8") as f:
+                return root_candidate, json.load(f)
+        except Exception:
+            return root_candidate, {}
+
+    return None, {}
+
+
+def _build_active_thesis_step_block(project_dir: str) -> list[str]:
+    """CM-1: Build IMMORTAL Active Thesis Execution Context block.
+
+    Extracts the current step, its verification criteria (from todo-checklist.md),
+    retry budget consumption, and dialogue state from live session.json.
+
+    This block survives context compression because it is regenerated fresh at every
+    SessionStart — it does NOT rely on snapshot content.
+
+    P1 Compliance: Pure file I/O + regex — deterministic, zero LLM.
+    SOT Compliance: Read-only (session.json + todo-checklist.md).
+    Returns: list of human-readable lines (empty if no active thesis step > 0).
+    """
+    if not project_dir:
+        return []
+
+    # Use shared SOT reader — single read, consistent snapshot
+    sot_path, sot = _read_active_thesis_sot(project_dir)
+    if not sot_path or not sot:
+        return []
+
+    current_step = sot.get("current_step", 0)
+    total_steps = sot.get("total_steps", 210)
+    if not isinstance(current_step, int) or current_step <= 0:
+        return []  # No active step (step 0 = not started)
+
+    project_name = sot.get("project_name", "?")
+    exec_substep = sot.get("execution_substep")
+    lines: list[str] = []
+    lines.append(f"Project: {project_name} | Step: {current_step}/{total_steps}")
+
+    if exec_substep:
+        lines.append(f"→ Last substep recorded: {exec_substep} (resume from here)")
+    else:
+        lines.append("→ execution_substep: None (step advance completed or substep not yet recorded)")
+
+    # Extract step description from todo-checklist.md
+    checklist_path = os.path.join(os.path.dirname(sot_path), "todo-checklist.md")
+    if os.path.exists(checklist_path):
+        step_desc = _extract_step_description_from_checklist(checklist_path, current_step)
+        if step_desc:
+            lines.append(f"Step description: {step_desc}")
+
+    # Dialogue state
+    ds = sot.get("dialogue_state")
+    if isinstance(ds, dict) and ds.get("status") == "in_progress":
+        rounds_used = ds.get("rounds_used", "?")
+        max_rounds = ds.get("max_rounds", "?")
+        last_verdict = ds.get("last_verdict", "unknown")
+        domain = ds.get("domain", "?")
+        lines.append(
+            f"Dialogue: ACTIVE (domain={domain}, Round {rounds_used}/{max_rounds}, "
+            f"last verdict={last_verdict})"
+        )
+    elif isinstance(ds, dict) and ds.get("status") in ("consensus", "escalated"):
+        lines.append(f"Dialogue: {ds['status'].upper()} (ended)")
+
+    # Retry budget snapshot — read from counter files (non-blocking)
+    budgets = _read_retry_budget_snapshot(os.path.dirname(sot_path), current_step)
+    if budgets:
+        lines.append(f"Retry budgets: {budgets}")
+
+    return lines
+
+
+def _extract_step_description_from_checklist(checklist_path: str, step: int) -> str:
+    """Extract step N description from todo-checklist.md.
+
+    Pattern: '- [ ] Step N: description' or '- [x] Step N: description'
+    P1 Compliance: Regex line match — deterministic.
+    """
+    _step_re = re.compile(
+        rf"^-\s*\[[ xX]\]\s*Step\s+{step}\s*:\s*(.+)$", re.MULTILINE
+    )
+    try:
+        with open(checklist_path, "r", encoding="utf-8") as f:
+            content = f.read(50_000)  # Max 50KB to avoid huge reads
+        m = _step_re.search(content)
+        return m.group(1).strip()[:120] if m else ""
+    except Exception:
+        return ""
+
+
+def _read_retry_budget_snapshot(project_dir: str, step: int) -> str:
+    """Read retry budget counter files for a step (non-blocking).
+
+    Counter files: verification-logs/.step-N-retry-count, dialogue-logs/.step-N-retry-count
+    P1 Compliance: Plain text integer read — deterministic.
+    """
+    parts: list[str] = []
+    for gate_subdir, gate_name in (
+        ("verification-logs", "verification"),
+        ("dialogue-logs", "dialogue"),
+    ):
+        counter_file = os.path.join(
+            project_dir, gate_subdir, f".step-{step}-retry-count"
+        )
+        if os.path.exists(counter_file):
+            try:
+                with open(counter_file, "r", encoding="utf-8") as f:
+                    count = f.read().strip()
+                parts.append(f"{gate_name}={count}")
+            except Exception:
+                pass
+    return ", ".join(parts) if parts else ""
+
+
+def _detect_active_dialogue(project_dir: str) -> dict | None:
+    """CM-2: Detect if an Adversarial Dialogue is currently in progress.
+
+    Scans thesis-output/*/ project directories for dialogue-logs/ directories
+    where rK critic files exist but step-N-summary.md does NOT exist
+    (summary is written only when dialogue ends).
+
+    P1 Compliance: Filesystem scan + regex — deterministic, zero LLM.
+    SOT Compliance: Read-only (reads session.json and dialogue-logs/).
+    Returns: dict with step, round, domain info if active dialogue found, else None.
+    """
+    if not project_dir or not os.path.isdir(project_dir):
+        return None
+
+    # Find thesis project directories (have session.json)
+    thesis_dirs = []
+    thesis_output = os.path.join(project_dir, "thesis-output")
+    if os.path.isdir(thesis_output):
+        for entry in os.listdir(thesis_output):
+            candidate = os.path.join(thesis_output, entry)
+            if os.path.isdir(candidate) and os.path.exists(
+                os.path.join(candidate, "session.json")
+            ):
+                thesis_dirs.append(candidate)
+    # Also check project root itself
+    if os.path.exists(os.path.join(project_dir, "session.json")):
+        thesis_dirs.append(project_dir)
+
+    _critic_file_re = re.compile(
+        r"step-(\d+)-r(\d+)-(fc|rv|cr)\.md$"
+    )
+    for tdir in thesis_dirs:
+        dlg_dir = os.path.join(tdir, "dialogue-logs")
+        if not os.path.isdir(dlg_dir):
+            continue
+
+        # Collect all critic files grouped by step
+        step_rounds: dict[int, dict] = {}
+        for fname in os.listdir(dlg_dir):
+            m = _critic_file_re.match(fname)
+            if not m:
+                continue
+            step_n = int(m.group(1))
+            round_k = int(m.group(2))
+            domain = "development" if m.group(3) == "cr" else "research"
+            if step_n not in step_rounds:
+                step_rounds[step_n] = {"max_round": 0, "domain": domain}
+            if round_k > step_rounds[step_n]["max_round"]:
+                step_rounds[step_n]["max_round"] = round_k
+
+        # Read session.json ONCE per project for SOT cross-validation.
+        # Two-signal detection: filesystem (no summary) AND SOT (not completed, not stale).
+        sot_current_step = 0
+        sot_raw_data: dict = {}
+        try:
+            sot_path = os.path.join(tdir, "session.json")
+            with open(sot_path, "r", encoding="utf-8") as f:
+                sot_raw_data = json.load(f)
+            sot_current_step = sot_raw_data.get("current_step", 0)
+            if not isinstance(sot_current_step, int):
+                sot_current_step = 0
+        except Exception:
+            pass
+
+        for step_n, info in step_rounds.items():
+            # Dialogue is ACTIVE if no summary file exists yet
+            summary_path = os.path.join(dlg_dir, f"step-{step_n}-summary.md")
+            if not os.path.exists(summary_path):
+                # SOT cross-validation: guard against stale/abandoned dialogues.
+                # If step_n is more than 1 step behind current_step, the workflow
+                # has already advanced past this step — the missing summary indicates
+                # an abandoned dialogue (crash/skip), not an active one.
+                # Also skip if SOT dialogue_state.status == "completed" (completed
+                # but summary file wasn't written due to crash).
+                ds = sot_raw_data.get("dialogue_state") or {}
+                dialogue_sot_status = ds.get("status", "unknown")
+
+                if dialogue_sot_status == "completed":
+                    continue  # SOT says completed — filesystem artifact, not active
+
+                if sot_current_step > 0 and step_n < sot_current_step - 1:
+                    continue  # Workflow advanced past this step — abandoned dialogue
+
+                sot_info = {
+                    "status": dialogue_sot_status,
+                    "max_rounds": ds.get("max_rounds", "?"),
+                    "rounds_used": ds.get("rounds_used", "?"),
+                    "last_verdict": ds.get("last_verdict", "unknown"),
+                    "execution_substep": sot_raw_data.get("execution_substep"),
+                }
+
+                return {
+                    "step": step_n,
+                    "round": info["max_round"],
+                    "domain": info["domain"],
+                    "project": os.path.basename(tdir),
+                    **sot_info,
+                }
+    return None
+
+
+def _surface_failure_predictions(project_dir: str) -> list[str]:
+    """Surface active failure predictions for RLM IMMORTAL section.
+
+    Reads failure-predictions/active-risks.md (generated by generate_failure_report.py).
+    Adds STALE warning if file is older than 7 days.
+    Returns empty list if no predictions file exists.
+
+    Design: Separate from existing PREDICTIVE DEBUGGING section (historical risk scores).
+    - Historical: predictive_debug_guard.py ← risk-scores.json ← error history
+    - Proactive: THIS function ← active-risks.md ← /predict-failures cross-domain scan
+    """
+    active_risks_path = os.path.join(project_dir, "failure-predictions", "active-risks.md")
+    if not os.path.exists(active_risks_path):
+        return []
+
+    try:
+        import time
+        age_seconds = time.time() - os.path.getmtime(active_risks_path)
+        age_days = age_seconds / 86400
+        stale = age_days > 7
+        stale_prefix = "⚠ STALE " if stale else ""
+
+        with open(active_risks_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Extract non-comment, non-empty lines
+        meaningful_lines = [
+            ln for ln in content.splitlines()
+            if ln.strip() and not ln.strip().startswith("<!--")
+        ]
+
+        if not meaningful_lines:
+            return []
+
+        output: list[str] = []
+        stale_note = f" (scan >{int(age_days)}d ago — run /predict-failures to refresh)" if stale else ""
+        output.append(f"■ {stale_prefix}ACTIVE FAILURE PREDICTIONS{stale_note}:")
+        # Surface up to 8 lines from active-risks.md
+        for ln in meaningful_lines[:8]:
+            output.append(f"  {ln.strip()}")
+
+        return output
+
+    except (IOError, OSError):
+        return []
+
+
+def _surface_pccs_state(project_dir: str) -> list[str]:
+    """Surface pCCS state from thesis SOT for IMMORTAL section.
+
+    Reads session.json.pccs block to surface calibration delta and
+    recent step scores. Enables Orchestrator to maintain pCCS context
+    across compression boundaries.
+
+    P1 Compliance: JSON read + dict formatting — deterministic.
+    SOT Compliance: Read-only.
+    Returns: list of lines (empty if no pCCS data).
+    """
+    sot = _read_active_thesis_sot(project_dir)
+    if not sot:
+        return []
+
+    pccs = sot.get("pccs")
+    if not isinstance(pccs, dict):
+        return []
+
+    lines: list[str] = []
+    cal_delta = pccs.get("cal_delta", 0.0)
+    last_step = pccs.get("last_step")
+    total_samples = pccs.get("total_cal_samples", 0)
+
+    lines.append(f"■ pCCS STATE (IMMORTAL — per-claim confidence scoring):")
+    lines.append(f"  cal_delta={cal_delta}, last_step={last_step}, cal_samples={total_samples}")
+
+    # Surface last 3 step results from history
+    history = pccs.get("history")
+    if isinstance(history, dict) and history:
+        sorted_keys = sorted(history.keys(), reverse=True)[:3]
+        for key in sorted_keys:
+            entry = history[key]
+            if isinstance(entry, dict):
+                mean = entry.get("mean_pccs", "?")
+                action = entry.get("action", "?")
+                green = entry.get("green", "?")
+                red = entry.get("red", "?")
+                lines.append(f"  {key}: mean={mean}, G={green}/R={red}, action={action}")
+
+    return lines
+
+
+def _extract_thesis_gate_hitl_state(project_dir: str) -> list[str]:
+    """CM-4: Extract Gate pass/fail and HITL decision history for IMMORTAL surface.
+
+    Reads session.json to get Gate and HITL state. These are human-approved
+    decisions that must never be lost in compression — HITL re-asking wastes
+    human effort; Gate state loss causes incorrect step sequencing.
+
+    P1 Compliance: JSON read + dict iteration — deterministic.
+    SOT Compliance: Read-only.
+    Returns: list of human-readable status lines (empty if no thesis project).
+    """
+    lines: list[str] = []
+    if not project_dir:
+        return lines
+
+    # Use shared SOT reader — single read, consistent snapshot
+    sot_path, sot = _read_active_thesis_sot(project_dir)
+    if not sot_path or not sot:
+        return lines
+
+    # Gates
+    gates = sot.get("gates", {})
+    gate_parts: list[str] = []
+    for gate_name, gate_data in sorted(gates.items()):
+        if isinstance(gate_data, dict):
+            status = gate_data.get("status", "pending")
+            marker = "✅" if status == "pass" else ("❌" if status == "fail" else "⏳")
+            gate_parts.append(f"{marker}{gate_name}:{status}")
+        elif isinstance(gate_data, str):
+            gate_parts.append(f"{gate_data} {gate_name}")
+    if gate_parts:
+        lines.append(f"Gates: {', '.join(gate_parts)}")
+
+    # HITL
+    hitls = sot.get("hitl_checkpoints", {})
+    hitl_parts: list[str] = []
+    for hitl_name, hitl_data in sorted(hitls.items()):
+        if isinstance(hitl_data, dict):
+            status = hitl_data.get("status", "pending")
+            if status != "pending":
+                marker = "✅" if status == "completed" else "⏳"
+                hitl_parts.append(f"{marker}{hitl_name}")
+        elif isinstance(hitl_data, str) and hitl_data != "pending":
+            hitl_parts.append(f"✅{hitl_name}")
+    if hitl_parts:
+        lines.append(f"HITL completed: {', '.join(hitl_parts)}")
+
+    # execution_substep (from 결함 C)
+    substep = sot.get("execution_substep")
+    if substep:
+        step_n = sot.get("current_step", "?")
+        lines.append(f"Last substep: step-{step_n} @ {substep} (resume here after reset)")
+
+    return lines
+
+
 def _build_recovery_output(source, latest_path, summary, sot_warning, snapshot_age, fallback_note="", project_dir=None, snapshot_content="", risk_data=None):
     """Build the RLM-style recovery output for SessionStart injection."""
     age_str = _format_age(snapshot_age)
+
+    # CM-2: Detect active Adversarial Dialogue BEFORE building output
+    # Inject PROMINENTLY at top of recovery — dialogue mid-round is highest priority context
+    active_dialogue = _detect_active_dialogue(project_dir) if project_dir else None
+
+    # CM-4: Extract Gate/HITL state for IMMORTAL surface
+    gate_hitl_lines = _extract_thesis_gate_hitl_state(project_dir) if project_dir else []
 
     # Build header
     output_lines = [
@@ -691,6 +1093,32 @@ def _build_recovery_output(source, latest_path, summary, sot_warning, snapshot_a
         f"전체 복원 파일: {latest_path}",
         "",
     ]
+
+    # CM-2: ACTIVE DIALOGUE WARNING — top of output, before all other context
+    if active_dialogue:
+        step_n = active_dialogue.get("step", "?")
+        round_k = active_dialogue.get("round", "?")
+        domain = active_dialogue.get("domain", "?")
+        last_verdict = active_dialogue.get("last_verdict", "unknown")
+        max_rounds = active_dialogue.get("max_rounds", "?")
+        rounds_used = active_dialogue.get("rounds_used", "?")
+        substep = active_dialogue.get("execution_substep")
+        output_lines.append(
+            f"⚠️ ACTIVE ADVERSARIAL DIALOGUE DETECTED (Step {step_n}, Round {round_k}, Domain: {domain})"
+        )
+        output_lines.append(
+            f"   Last verdict: {last_verdict} | Rounds: {rounds_used}/{max_rounds}"
+        )
+        output_lines.append(
+            f"   → Resume from Round {int(round_k) + 1 if str(round_k).isdigit() else '?'}."
+            f" DO NOT restart from Round 1."
+        )
+        if substep:
+            output_lines.append(f"   → Last substep recorded: {substep}")
+        output_lines.append(
+            f"   → Dialogue summary: dialogue-logs/step-{step_n}-summary.md (does NOT exist yet — dialogue in progress)"
+        )
+        output_lines.append("")
 
     # Brief summary
     task_info = ""
@@ -769,6 +1197,11 @@ def _build_recovery_output(source, latest_path, summary, sot_warning, snapshot_a
         output_lines.append("")
         output_lines.append(f"⚠️ {sot_warning}")
 
+    # Compression audit trail — alert if snapshot was heavily compressed
+    if compression_note:
+        output_lines.append("")
+        output_lines.append(compression_note)
+
     # Knowledge Archive pointers (Area 1: Cross-Session)
     # Use get_snapshot_dir(project_dir) — NOT os.path.dirname(latest_path)
     # (E6 fallback may point latest_path to sessions/ subdirectory, breaking path derivation)
@@ -805,8 +1238,11 @@ def _build_recovery_output(source, latest_path, summary, sot_warning, snapshot_a
             # P0-RLM: Active Knowledge Retrieval — relevance-scored
             # Surface past sessions most relevant to CURRENT work context
             file_paths_for_retrieval = [c for l, c in summary if l == "수정_파일_경로"]
+            _current_thesis_step = _get_current_thesis_step(project_dir)
             relevant = _retrieve_relevant_sessions(
-                ki_path, task_info or "", file_paths_for_retrieval
+                ki_path, task_info or "", file_paths_for_retrieval,
+                current_step=_current_thesis_step,
+                error_info_for_scoring=bool(error_info),
             )
             if relevant:
                 output_lines.append("")
@@ -852,6 +1288,15 @@ def _build_recovery_output(source, latest_path, summary, sot_warning, snapshot_a
                 output_lines.append("■ 최근 팀 실행 이력 (자동 표면화):")
                 for th in team_hints[:3]:
                     output_lines.append(f"  - {th}")
+
+            # P1-4: Proactive Success Pattern surfacing
+            # Surface proven work patterns for cross-session quality improvement
+            success_hints = _extract_recent_success_patterns(recent)
+            if success_hints:
+                output_lines.append("")
+                output_lines.append("■ 검증된 성공 패턴 (자동 표면화):")
+                for sh in success_hints[:3]:
+                    output_lines.append(f"  - {sh}")
 
             # P3-RLM: Active Quarterly Archive consumption (long-term patterns)
             qa_path = os.path.join(ka_snapshot_dir, "knowledge-archive-quarterly.jsonl")
@@ -963,6 +1408,21 @@ def _build_recovery_output(source, latest_path, summary, sot_warning, snapshot_a
                     f"resolution:{rr:.0%}"
                 )
 
+    # Proactive Failure Predictions (from /predict-failures — cross-domain scan)
+    # Distinct from PREDICTIVE DEBUGGING above (which is historical error-based)
+    failure_pred_lines = _surface_failure_predictions(project_dir) if project_dir else []
+    if failure_pred_lines:
+        output_lines.append("")
+        for fpl in failure_pred_lines:
+            output_lines.append(fpl)
+
+    # pCCS State (IMMORTAL — per-claim confidence scoring)
+    pccs_lines = _surface_pccs_state(project_dir) if project_dir else []
+    if pccs_lines:
+        output_lines.append("")
+        for pl in pccs_lines:
+            output_lines.append(pl)
+
     # Phase 1-A: Thesis continuity markers (pending gates + blocked steps)
     thesis_continuity = _extract_thesis_continuity(project_dir)
     if thesis_continuity:
@@ -974,6 +1434,24 @@ def _build_recovery_output(source, latest_path, summary, sot_warning, snapshot_a
         bs = thesis_continuity.get("blocked_steps", [])
         if bs:
             output_lines.append(f"  Blocked steps: {', '.join(bs)}")
+
+    # CM-4: IMMORTAL Gate/HITL state — human decisions must never be lost to compression
+    if gate_hitl_lines:
+        output_lines.append("")
+        output_lines.append("■ THESIS GATE & HITL STATE (IMMORTAL — human decisions):")
+        for ghl in gate_hitl_lines:
+            output_lines.append(f"  {ghl}")
+
+    # CM-1: IMMORTAL Active Thesis Execution Context block
+    # Most critical information for Orchestrator context recovery: current step
+    # and what it requires. This block is injected at top priority so it survives
+    # even heavy compression. Extracted from session.json (live SOT, not snapshot).
+    active_step_block = _build_active_thesis_step_block(project_dir)
+    if active_step_block:
+        output_lines.append("")
+        output_lines.append("■ ACTIVE THESIS EXECUTION CONTEXT (IMMORTAL):")
+        for line in active_step_block:
+            output_lines.append(f"  {line}")
 
     # Phase 1-C: Quality gate trend (pass/fail history from knowledge-index)
     if os.path.exists(ki_path) if has_archive else False:
@@ -1128,6 +1606,36 @@ def _extract_recent_team_summaries(recent_sessions):
     return results[:3]
 
 
+def _extract_recent_success_patterns(recent_sessions):
+    """P1-4: Extract success patterns from recent Knowledge Archive sessions.
+
+    Proactively surfaces proven work patterns (Edit→Bash→success sequences)
+    at SessionStart, enabling cross-session learning for quality improvement.
+    Symmetric with _extract_recent_error_resolutions (P1-1).
+
+    P1 Compliance: Deterministic extraction from structured JSON data.
+    Returns: list of human-readable strings (max 3).
+    """
+    results = []
+    for session in reversed(recent_sessions):
+        success_patterns = session.get("success_patterns", [])
+        if not isinstance(success_patterns, list):
+            continue
+        for sp in success_patterns:
+            if isinstance(sp, dict):
+                pattern = sp.get("pattern", "")
+                count = sp.get("count", 1)
+                files = sp.get("files", [])
+                file_str = ", ".join(files[:2]) if isinstance(files, list) and files else ""
+                loc = f" ({file_str})" if file_str else ""
+                results.append(f"{pattern} ×{count}{loc}")
+            elif isinstance(sp, str):
+                results.append(sp[:80])
+        if len(results) >= 3:
+            break
+    return results[:3]
+
+
 def parse_snapshot_sections(md_text):
     """P1-RLM: Parse snapshot into sections using SECTION markers.
 
@@ -1173,7 +1681,24 @@ IMMORTAL_SECTIONS = {
 }
 
 
-def _retrieve_relevant_sessions(ki_path, task_info, file_paths, max_results=3):
+def _get_current_thesis_step(project_dir):
+    """CM-3: Extract current_step from active (non-completed) thesis for proximity scoring.
+
+    Uses _read_active_thesis_sot() — no additional disk read.
+    Returns None for completed/paused projects (no active step to boost).
+    Returns: int or None
+    """
+    _, sot = _read_active_thesis_sot(project_dir)
+    if not sot:
+        return None
+    if sot.get("status") in ("completed", "paused"):
+        return None
+    step = sot.get("current_step")
+    return step if isinstance(step, int) else None
+
+
+def _retrieve_relevant_sessions(ki_path, task_info, file_paths, max_results=3,
+                                current_step=None, error_info_for_scoring=False):
     """P0-RLM: Active Knowledge Retrieval — relevance-scored session matching.
 
     Instead of showing only the N most recent sessions, this function scores
@@ -1184,6 +1709,9 @@ def _retrieve_relevant_sessions(ki_path, task_info, file_paths, max_results=3):
       - Keyword overlap between current task and past user_task/last_instruction
       - File path overlap between current modified files and past modified_files
       - Tag overlap between current path_tags and past tags
+      - CM-3: thesis_step proximity boost (within ±2: +8, within ±5: +3)
+      - Temporal decay: sessions within 30 days get recency bonus (max +3.0)
+      - Error resolution rate: past sessions with resolved errors get bonus (+2.0 max)
 
     Returns: list of (score, session_dict) tuples, sorted by score desc.
     Non-blocking: returns empty list on any error.
@@ -1246,6 +1774,44 @@ def _retrieve_relevant_sessions(ki_path, task_info, file_paths, max_results=3):
                 resolved = sum(1 for e in past_errors if isinstance(e, dict) and e.get("resolution"))
                 score += min(len(past_errors) * 0.3, 3.0)  # Count-based, capped at 3.0
                 score += min(resolved * 0.5, 2.5)  # Resolution bonus, capped at 2.5
+
+            # CM-3: Step proximity boost — sessions from nearby thesis steps are more relevant.
+            # Reads "thesis_step" (scalar int, not a range — renamed from step_range).
+            # Kept deliberately moderate so step proximity is a tie-breaker, not a dominator.
+            # Max boost (15.0 at dist=0) is below file-match ceiling (~25.0) and keyword (~20.0).
+            if current_step is not None:
+                past_step = session.get("thesis_step")
+                if isinstance(past_step, int):
+                    dist = abs(past_step - current_step)
+                    if dist == 0:
+                        score += 15.0   # Exact same step — strongest signal
+                    elif dist <= 2:
+                        score += 8.0    # Adjacent steps — same chapter context
+                    elif dist <= 5:
+                        score += 3.0    # Same wave area — weak proximity
+
+            # 6. Temporal decay — recent sessions are more likely relevant
+            # Max boost: +3.0 at age=0, linear decay to 0 at 30 days
+            session_ts = session.get("timestamp")
+            if session_ts:
+                try:
+                    session_time = datetime.fromisoformat(session_ts.replace("Z", "+00:00"))
+                    age_days = (datetime.now(session_time.tzinfo) - session_time).total_seconds() / 86400
+                    if 0 <= age_days <= 30:
+                        score += max(0.0, (30 - age_days) * 0.1)  # 3.0 at day 0, 0 at day 30
+                except (ValueError, TypeError, AttributeError):
+                    pass
+
+            # 7. Error resolution rate — sessions with resolved errors boost
+            # relevant when current session also has errors (same problem domain)
+            if error_info_for_scoring:
+                past_errors = session.get("error_patterns", [])
+                if isinstance(past_errors, list) and past_errors:
+                    resolved = sum(1 for e in past_errors if isinstance(e, dict) and e.get("resolution"))
+                    total = len(past_errors)
+                    if total > 0 and resolved > 0:
+                        resolution_rate = resolved / total
+                        score += min(resolution_rate * 2.0, 2.0)  # Up to +2.0
 
             if score > 0:
                 scored.append((score, session))
@@ -1321,6 +1887,38 @@ def _extract_quarterly_insights(qa_path):
         return insights
     except Exception:
         return []
+
+
+def _extract_compression_audit(snapshot_content):
+    """Extract compression-audit HTML comment from snapshot.
+
+    Format: <!-- compression-audit: P1-dedup:-500ch P3-wlog:-200ch P5-diff:-800ch | final:8500ch/12000ch -->
+    Only surfaces a warning if compression reached P5+ (significant data loss).
+    Returns: warning string or empty string.
+    """
+    match = re.search(
+        r'<!-- compression-audit:\s*(.*?)\s*\|\s*final:(\d+)ch/(\d+)ch\s*-->',
+        snapshot_content,
+    )
+    if len(snapshot_content) > 1000000:  # 1MB limit for regex/processing
+        return "⚠️  COMPRESSION: Snapshot too large for detailed audit."
+
+    phases_str = match.group(1).strip()
+    final_size = int(match.group(2))
+    max_size = int(match.group(3))
+
+    # Extract highest phase number from P1-xxx, P5-xxx, P7-xxx format
+    phase_nums = re.findall(r'P(\d+)-', phases_str)
+    max_phase = max((int(p) for p in phase_nums), default=0)
+
+    if max_phase >= 5:
+        ratio = round(final_size / max_size * 100) if max_size > 0 else 0
+        return (
+            f"⚠️ COMPRESSION: Snapshot was compressed to P{max_phase} "
+            f"({ratio}% of max). Some context may have been lost. "
+            f"Read the full snapshot file for complete details."
+        )
+    return ""
 
 
 def _find_best_snapshot(snapshot_dir, latest_path):

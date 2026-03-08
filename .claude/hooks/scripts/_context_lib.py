@@ -867,6 +867,70 @@ def validate_sot_schema(ap_state):
                                 f".{task_id} must be dict"
                             )
 
+    # S9: outputs key suffix must be a recognized language code (en | ko) or absent
+    # Stricter enforcement than S3: prevents agents from writing arbitrary suffix keys
+    VALID_OUTPUT_LANG_SUFFIXES = frozenset({"en", "ko"})
+    if isinstance(outputs, dict):
+        for key in outputs:
+            if not isinstance(key, str) or not key.startswith("step-"):
+                continue  # Already reported in S3
+            suffix = key[5:]  # after "step-"
+            parts = suffix.split("-", 1)
+            if parts[0].isdigit() and len(parts) > 1:
+                lang_suffix = parts[1]
+                if lang_suffix not in VALID_OUTPUT_LANG_SUFFIXES:
+                    warnings.append(
+                        f"SOT schema: output key '{key}' has unrecognized language suffix "
+                        f"'{lang_suffix}' (expected: en | ko) — possible agent hallucination"
+                    )
+
+    # S10: pacs.history step numbers must not exceed current_step
+    # Prevents agents from recording PACS scores for future steps they haven't executed
+    # Note: pacs already bound at S7 (line 726) — no re-read needed
+    if isinstance(pacs, dict) and isinstance(cs, int):
+        history = pacs.get("history")
+        if isinstance(history, dict):
+            for hkey in history:
+                if isinstance(hkey, str) and hkey.startswith("step-"):
+                    step_num_str = hkey[5:]
+                    if step_num_str.isdigit():
+                        step_num = int(step_num_str)
+                        if step_num > cs:
+                            warnings.append(
+                                f"SOT schema: pacs.history '{hkey}' records data "
+                                f"for future step (current_step={cs}) — "
+                                f"possible parallel agent data inconsistency"
+                            )
+
+    # S11: pccs schema validation (if present)
+    # Validates pccs SOT block structure when pCCS is active.
+    # pccs is optional — only validated when the key exists.
+    pccs = ap_state.get("pccs")
+    if pccs is not None:
+        if not isinstance(pccs, dict):
+            warnings.append("SOT schema: 'pccs' must be a dict")
+        else:
+            # S11a: cal_delta must be numeric
+            cal = pccs.get("cal_delta")
+            if cal is not None and not isinstance(cal, (int, float)):
+                warnings.append(f"SOT schema: pccs.cal_delta must be numeric, got {type(cal).__name__}")
+            # S11b: last_step must not exceed current_step
+            last_step = pccs.get("last_step")
+            if isinstance(last_step, int) and isinstance(cs, int) and last_step > cs:
+                warnings.append(
+                    f"SOT schema: pccs.last_step={last_step} exceeds "
+                    f"current_step={cs} — possible future data"
+                )
+            # S11c: history entries must have required fields
+            pccs_hist = pccs.get("history")
+            if isinstance(pccs_hist, dict):
+                for pkey, pval in pccs_hist.items():
+                    if isinstance(pval, dict):
+                        if "mean_pccs" not in pval:
+                            warnings.append(f"SOT schema: pccs.history.{pkey} missing 'mean_pccs'")
+                        if "action" not in pval:
+                            warnings.append(f"SOT schema: pccs.history.{pkey} missing 'action'")
+
     return warnings
 
 
@@ -1642,6 +1706,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     # Section 2: SOT State (deterministic file read)
     sections.append(SM["sot"])
     sections.append("## SOT 상태 (Workflow State)")
+    sections.append("<!-- IMMORTAL: SOT 상태는 세션 복원 시 반드시 보존 — 워크플로우 진행 상태의 핵심 -->")
     if sot_content:
         sections.append(f"파일: `{sot_content['path']}`")
         sections.append(f"수정 시각: {sot_content['mtime']}")
@@ -1845,6 +1910,7 @@ def generate_snapshot_md(session_id, trigger, project_dir, entries, work_log=Non
     # Section 3: Resume Protocol (deterministic — P1 compliant)
     sections.append(SM["resume"])
     sections.append("## 복원 지시 (Resume Protocol)")
+    sections.append("<!-- IMMORTAL: 복원 지시는 세션 복원 시 반드시 보존 — 행동 연속성 핵심 -->")
     sections.append("<!-- Python 결정론적 생성 — P1 준수 -->")
     sections.append("")
     if file_ops:
@@ -2961,6 +3027,7 @@ _KI_REQUIRED_DEFAULTS = {
     "phase": "",
     "completion_summary": {},
     "diagnosis_patterns": [],
+    "thesis_step": None,  # CM-3: thesis current_step at archive time (int or None)
 }
 
 
@@ -3041,24 +3108,31 @@ def _classify_error_patterns(entries):
                 error_type = etype
                 break
 
-        # A2: Resolution matching — find successful follow-up within 5 entries
+        # A2: Resolution matching — find successful follow-up within 10 entries
+        # Extended from 5→10 to capture multi-retry recovery chains
         resolution = None
+        retry_count = 0
         error_file = os.path.basename(id_to_file.get(tid, ""))
         err_pos = entry_id_to_pos.get(id(tr), -1)
         if err_pos >= 0:
-            for next_e in entries[err_pos + 1 : err_pos + 6]:
+            for next_e in entries[err_pos + 1 : err_pos + 11]:
                 if next_e.get("type") != "tool_result":
-                    continue
-                if next_e.get("is_error", False):
                     continue
                 next_tid = next_e.get("tool_use_id", "")
                 next_tool = id_to_tool.get(next_tid, "")
                 next_file = os.path.basename(id_to_file.get(next_tid, ""))
+                if next_e.get("is_error", False):
+                    # Count intermediate failures (retry attempts)
+                    if next_tool in ("Edit", "Write", "Bash"):
+                        retry_count += 1
+                    continue
                 # File-aware: same file must match (or error had no file context)
                 if next_tool in ("Edit", "Write", "Bash") and (
                     not error_file or next_file == error_file
                 ):
                     resolution = {"tool": next_tool, "file": next_file}
+                    if retry_count > 0:
+                        resolution["retries"] = retry_count
                     break
 
         patterns.append({
@@ -3395,6 +3469,46 @@ def _classify_session_type(user_task, last_instruction, phase):
     return phase_map.get(phase, "")
 
 
+def _extract_thesis_step_at_archive(project_dir):
+    """CM-3: Read current_step from active thesis session.json at archive time.
+
+    Iterates thesis-output/{project_name}/session.json (same pattern as
+    _extract_thesis_continuity). Returns the step number of the first active
+    (non-completed, non-paused) thesis project found.
+
+    P1 Compliance: Deterministic JSON extraction.
+    SOT Compliance: Read-only access.
+    Non-blocking: returns None on any error or if no active thesis project.
+    Returns: int (current_step) or None
+    """
+    if not project_dir:
+        return None
+    try:
+        thesis_root = os.path.join(project_dir, "thesis-output")
+        if not os.path.isdir(thesis_root):
+            return None
+        for proj_name in sorted(os.listdir(thesis_root)):
+            sot_path = os.path.join(thesis_root, proj_name, "session.json")
+            if not os.path.isfile(sot_path):
+                continue
+            try:
+                with open(sot_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            status = data.get("status", "")
+            if status in ("completed", "paused"):
+                continue
+            step = data.get("current_step")
+            if isinstance(step, int):
+                return step
+        return None
+    except Exception:
+        return None
+
+
 def extract_session_facts(session_id, trigger, project_dir, entries, token_estimate=0):
     """Extract deterministic session facts for knowledge-index.jsonl.
 
@@ -3654,6 +3768,14 @@ def extract_session_facts(session_id, trigger, project_dir, entries, token_estim
     session_type = _classify_session_type(user_task, last_instruction, phase)
     if session_type:
         facts["session_type"] = session_type
+
+    # CM-3: thesis_step — thesis current_step at archive time for proximity scoring.
+    # Scalar int (not a range). Used by _retrieve_relevant_sessions() for step boost.
+    # Reads thesis-output/*/session.json (same pattern as _extract_thesis_continuity).
+    # P1 Compliance: Deterministic JSON read, non-blocking, read-only SOT access.
+    _thesis_step = _extract_thesis_step_at_archive(project_dir)
+    if _thesis_step is not None:
+        facts["thesis_step"] = _thesis_step
 
     # Mark ETERNAL fields for archival protection
     facts["_eternal_fields"] = ["team_summaries", "diagnosis_patterns", "design_decisions"]
@@ -3948,6 +4070,36 @@ def _extract_quality_gate_state(project_dir):
         except OSError:
             continue
 
+    # In-progress dialogue check — MUST run before early return so it fires
+    # even when max_step==0 (no pacs/review/verify logs yet, but dialogue started).
+    # RLM gap fix: when context resets mid-dialogue, inject current round state
+    # as a POINTER so Orchestrator knows to read session.json.dialogue_state.
+    _session_json_path = os.path.join(project_dir, "session.json")
+    if os.path.exists(_session_json_path):
+        try:
+            with open(_session_json_path, "r", encoding="utf-8") as _f:
+                _session_data = json.load(_f)
+            _ds = _session_data.get("dialogue_state")
+            if isinstance(_ds, dict) and _ds.get("status") == "in_progress":
+                _rounds_used = _ds.get("rounds_used", 0)
+                _max_rounds = _ds.get("max_rounds", "?")
+                _domain = _ds.get("domain", "?")
+                _step_num = _ds.get("step", max_step)
+                _last_verdict = "none"
+                _history = _ds.get("round_history", [])
+                if isinstance(_history, list) and _history:
+                    _last_entry = _history[-1]
+                    if isinstance(_last_entry, dict):
+                        _last_verdict = _last_entry.get("verdict", "none")
+                lines.append(
+                    f"- **Dialogue [IN-PROGRESS]**: step={_step_num}, "
+                    f"round={_rounds_used}/{_max_rounds}, domain={_domain}, "
+                    f"last_verdict={_last_verdict} — "
+                    f"Read session.json.dialogue_state for full state"
+                )
+        except Exception:
+            pass
+
     if max_step == 0:
         return lines
 
@@ -4109,6 +4261,32 @@ def _extract_quality_gate_state(project_dir):
                 )
         except Exception:
             pass
+
+    # Dialogue state for the latest step (if dialogue-logs/ exists and summary present)
+    # Priority 1: completed dialogue → read step-N-summary.md
+    # Priority 2: in-progress dialogue → read session.json.dialogue_state (RLM gap fix)
+    # This ensures context recovery mid-dialogue restores current round/domain/feedback.
+    dialogue_summary_path = os.path.join(
+        project_dir, "dialogue-logs", f"step-{max_step}-summary.md"
+    )
+    if os.path.exists(dialogue_summary_path):
+        try:
+            with open(dialogue_summary_path, "r", encoding="utf-8") as f:
+                dlg_content = f.read(2000)
+            outcome_match = re.search(
+                r"Outcome\s*:\s*(consensus|escalated)", dlg_content, re.IGNORECASE
+            )
+            rounds_match = re.search(r"Rounds\s+Used\s*:\s*(\d+)", dlg_content, re.IGNORECASE)
+            if outcome_match:
+                dlg_outcome = outcome_match.group(1)
+                dlg_rounds = rounds_match.group(1) if rounds_match else "?"
+                lines.append(
+                    f"- **Dialogue**: outcome={dlg_outcome}, rounds={dlg_rounds}"
+                )
+        except Exception:
+            pass
+    # Note: in-progress dialogue is handled before the max_step==0 early return above.
+    # No else: branch needed here — avoids duplicate injection when max_step>0.
 
     return lines
 
@@ -4318,6 +4496,33 @@ def parse_review_verdict(review_path):
         result["reviewer_pacs"] = min(result["pacs_dimensions"].values())
 
     return result
+
+
+def verify_verdict_consistency(verdict, critical_count, warning_count=0):
+    """H3: P1 cross-check — verdict must be logically consistent with issues.
+
+    Rules (deterministic):
+      - PASS + critical_count >= 1 → INCONSISTENCY (Critical issues require FAIL)
+      - FAIL + critical_count == 0 AND warning_count == 0 → SUSPICIOUS (justify)
+
+    Returns: list of warning strings (empty = consistent).
+    """
+    warnings = []
+    if verdict is None:
+        return warnings
+
+    v = verdict.upper()
+    if v == "PASS" and critical_count >= 1:
+        warnings.append(
+            f"VERDICT_INCONSISTENCY: Verdict=PASS but {critical_count} Critical "
+            f"issue(s) found. Critical issues require FAIL verdict."
+        )
+    if v == "FAIL" and critical_count == 0 and warning_count == 0:
+        warnings.append(
+            "VERDICT_SUSPICIOUS: Verdict=FAIL but no Critical/Warning issues found. "
+            "Justify failure or correct verdict."
+        )
+    return warnings
 
 
 def calculate_pacs_delta(project_dir, step_number):
@@ -4556,6 +4761,52 @@ def validate_review_sequence(project_dir, step_number):
     return (True, None)
 
 
+def validate_file_coverage(review_path, files_to_check):
+    """CR6: Verify all declared files appear in the code review report.
+
+    P1 Compliance: String presence check — deterministic.
+    SOT Compliance: Read-only access to review file.
+
+    Args:
+        review_path: Path to the review report file
+        files_to_check: List of filenames (basename only) that must appear in report
+
+    Returns:
+        tuple: (is_valid: bool, missing_files: list[str], warnings: list[str])
+    """
+    if not files_to_check:
+        return (True, [], [])
+
+    if not os.path.exists(review_path):
+        return (
+            False,
+            list(files_to_check),
+            [f"CR6 FAIL: Review file not found: {review_path}"],
+        )
+
+    try:
+        with open(review_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except (IOError, UnicodeDecodeError) as e:
+        return (False, list(files_to_check), [f"CR6 FAIL: Cannot read review file: {e}"])
+
+    missing = []
+    for filename in files_to_check:
+        # Check for basename presence (case-sensitive for code files)
+        basename = os.path.basename(filename.strip())
+        if basename and basename not in content:
+            missing.append(basename)
+
+    if missing:
+        return (
+            False,
+            missing,
+            [f"CR6 FAIL: Files not mentioned in review: {', '.join(missing)}"],
+        )
+
+    return (True, [], [])
+
+
 # =============================================================================
 # Translation P1 Validation (T1-T9) + Universal pACS + Verification Log P1
 # =============================================================================
@@ -4598,6 +4849,16 @@ _VERIFY_CRITERION_CHECKLIST_RE = re.compile(
 _VERIFY_CRITERION_TABLE_RE = re.compile(
     r"^\|\s*([^|]+?)\s*\|\s*(PASS|FAIL)\s*\|",
     re.MULTILINE | re.IGNORECASE,
+)
+# Table format with evidence capture: "| Criterion | PASS | evidence text |"
+_VERIFY_CRITERION_TABLE_EVIDENCE_RE = re.compile(
+    r"^\|\s*([^|]+?)\s*\|\s*(PASS|FAIL)[^|]*\|\s*([^|]*?)\s*\|",
+    re.MULTILINE | re.IGNORECASE,
+)
+# V1e: Compound criterion detection — conjunctions that indicate bundled criteria
+_VERIFY_COMPOUND_CRITERION_RE = re.compile(
+    r"\s+(?:\+|and\s|및\s|그리고\s|&\s)",
+    re.IGNORECASE,
 )
 # Overall result: "## Overall: PASS", "Overall Result: FAIL"
 _VERIFY_OVERALL_RE = re.compile(
@@ -4889,6 +5150,14 @@ def verify_pacs_arithmetic(pacs_log_path):
     except (IOError, UnicodeDecodeError):
         return (True, None)  # Unreadable → graceful skip
 
+    # H7: Normalize non-table pACS dimension formats before extraction
+    # Converts "F (Faithfulness): 85" or "F: 85" to "| F | 85 |" for regex matching
+    content = re.sub(
+        r'^([FCL][a-z]?)\s*(?:\([^)]*\))?\s*:\s*(\d{1,3})\s*$',
+        r'| \1 | \2 |',
+        content, flags=re.MULTILINE,
+    )
+
     # --- Extract dimension scores ---
     dims = {}
     seen_dim_scores = {}  # dim -> list of scores (for ambiguity detection)
@@ -4985,6 +5254,62 @@ def extract_remediations(warnings, remediations_dict):
                         f"from _REMEDIATIONS — add an entry to the validator script"
                     )
     return result
+
+
+def _verify_pre_mortem_substance(content):
+    """H5: PA4a/PA4b — Verify Pre-mortem section has substantive content.
+
+    P1 Compliance: Deterministic regex + line counting.
+    SOT Compliance: Read-only — operates on content string.
+
+    Checks:
+      PA4a: Pre-mortem section has ≥ 3 substantive lines (not headers/blank)
+      PA4b: No generic dismissal patterns (e.g. "nothing wrong", "all correct")
+
+    Returns: list of warning strings.
+    """
+    warnings = []
+
+    # Extract pre-mortem section content
+    pm_match = re.search(
+        r"(?:Pre-mortem|사전 부검|pre.mortem|프리모템|what could go wrong)"
+        r".*?\n(.*?)(?=^#+\s|\Z)",
+        content, re.DOTALL | re.MULTILINE | re.IGNORECASE,
+    )
+    if not pm_match:
+        return warnings  # PA4 handles missing section
+
+    pm_text = pm_match.group(1).strip()
+
+    # PA4a: Minimum substantive lines (≥ 3 non-empty, non-header lines)
+    lines = [
+        line for line in pm_text.split("\n")
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if len(lines) < 3:
+        warnings.append(
+            f"PA4a WARN: Pre-mortem has {len(lines)} substantive line(s), "
+            f"expected ≥ 3. Provide specific risk analysis."
+        )
+
+    # PA4b: Generic dismissal pattern detection
+    _GENERIC_DISMISSALS = [
+        r"nothing.{0,15}(?:wrong|bad|incorrect)",
+        r"no\s+(?:issue|problem|risk|concern)s?(?:\s+(?:found|detected|identified))?",
+        r"everything.{0,10}(?:fine|good|perfect|ok|correct)",
+        r"all.{0,10}(?:correct|good|fine|proper)",
+        r"no\s+(?:significant|major|critical)\s+(?:issue|problem|risk)",
+    ]
+    for pat in _GENERIC_DISMISSALS:
+        match = re.search(pat, pm_text, re.IGNORECASE)
+        if match:
+            warnings.append(
+                f"PA4b WARN: Pre-mortem contains generic dismissal: "
+                f"'{match.group()[:50]}'. Provide specific, actionable risks."
+            )
+            break  # One warning is sufficient
+
+    return warnings
 
 
 def validate_pacs_output(project_dir, step_number, pacs_type="general"):
@@ -5093,6 +5418,10 @@ def validate_pacs_output(project_dir, step_number, pacs_type="general"):
         warnings.append(
             "PA4 FAIL: Pre-mortem section not found — mandatory before pACS scoring"
         )
+    else:
+        # H5: PA4a/PA4b — Pre-mortem substance validation (P1 deterministic)
+        pm_warnings = _verify_pre_mortem_substance(content)
+        warnings.extend(pm_warnings)
 
     # PA5: Arithmetic correctness (delegates to verify_pacs_arithmetic)
     arith_valid, arith_warning = verify_pacs_arithmetic(pacs_path)
@@ -5193,7 +5522,7 @@ def validate_step_output(project_dir, step_number, sot_data=None):
 
 
 def validate_verification_log(project_dir, step_number):
-    """V1: Verification log structural integrity (V1a-V1c).
+    """V1: Verification log structural integrity (V1a-V1e).
 
     P1 Compliance: Filesystem + regex — deterministic.
     SOT Compliance: Read-only access to verification-logs/.
@@ -5202,6 +5531,8 @@ def validate_verification_log(project_dir, step_number):
       V1a: verification-logs/step-{N}-verify.md exists + size >= MIN_OUTPUT_SIZE
       V1b: Each criterion has explicit PASS/FAIL marking (checklist or table)
       V1c: Logical consistency — if any criterion is FAIL, overall must be FAIL
+      V1d: Evidence quality — each criterion's evidence >= 20 chars (EVP)
+      V1e: Compound criterion detection — warn if criteria bundle multiple actions (EVP)
 
     Args:
         project_dir: Project root directory path
@@ -5209,8 +5540,7 @@ def validate_verification_log(project_dir, step_number):
 
     Returns:
         tuple: (is_valid: bool, warnings: list[str])
-        - is_valid: True only if V1a-V1c pass
-        - warnings: List of human-readable failure reasons
+        - is_valid: True only if V1a-V1e pass (V1e is WARNING, does not fail)
     """
     warnings = []
     verify_path = os.path.join(
@@ -5287,15 +5617,50 @@ def validate_verification_log(project_dir, step_number):
             "V1c FAIL: No overall PASS/FAIL result found in verification log"
         )
 
-    is_valid = len(warnings) == 0
+    # V1d: Evidence quality — each criterion must have substantive evidence (≥ 20 chars)
+    # Extract evidence from table format (3rd column after PASS/FAIL)
+    evidence_map = {}
+    for match in _VERIFY_CRITERION_TABLE_EVIDENCE_RE.finditer(content):
+        name = match.group(1).strip()
+        if name.lower().rstrip("-") in _VERIFY_TABLE_HEADER_WORDS:
+            continue
+        if name.startswith("-"):
+            continue
+        evidence = match.group(3).strip()
+        # Unescape pipe characters for accurate length measurement
+        evidence = evidence.replace("\\|", "|")
+        evidence_map[name] = evidence
+
+    _MIN_EVIDENCE_LEN = 20
+    for c in criteria:
+        cname = c["name"]
+        ev = evidence_map.get(cname, "")
+        if ev and len(ev) < _MIN_EVIDENCE_LEN:
+            warnings.append(
+                f"V1d FAIL: Criterion '{cname}' has insufficient evidence "
+                f"({len(ev)} chars, min {_MIN_EVIDENCE_LEN}): \"{ev}\""
+            )
+
+    # V1e: Compound criterion detection — warn if a single criterion bundles
+    # multiple independent verifiable actions (conjunction pattern)
+    for c in criteria:
+        if _VERIFY_COMPOUND_CRITERION_RE.search(c["name"]):
+            warnings.append(
+                f"V1e WARNING: Criterion '{c['name']}' may bundle multiple "
+                f"actions — consider splitting into atomic criteria (EVP-1)"
+            )
+
+    # V1e is WARNING-only (does not invalidate); V1a-V1d are FAIL
+    is_valid = not any("FAIL" in w for w in warnings)
     return (is_valid, warnings)
 
 
 def generate_verification_log(step_number, criteria_results, overall=None):
-    """Generate a V1a-V1c compliant verification log (deterministic).
+    """Generate a V1a-V1e compliant verification log (deterministic).
 
     P1 Compliance: Pure string formatting — no LLM interpretation.
     Called by Orchestrator at E5.3 to produce verification-logs/step-N-verify.md.
+    V1d Note: Each evidence string should be >= 20 chars to pass V1d quality check.
 
     Args:
         step_number: Step number (int).
@@ -6475,12 +6840,28 @@ def _determine_hypothesis_priority(retry_history, upstream_evidence, gate):
     })
 
     # H3: Criteria interpretation error — higher priority for review gate
-    h3_priority = 2 if gate == "review" else 3
+    # Also elevated for verification gate when V1d failures suggest hallucinated evidence
+    h3_priority = 3
+    if gate == "review":
+        h3_priority = 2
+    elif gate == "verification":
+        # Check if raw evidence contains V1d failures (hallucinated evidence pattern)
+        v1d_hint = any(
+            "V1d" in d.get("selected_hypothesis", "") or
+            "evidence" in d.get("selected_hypothesis", "").lower()
+            for d in prev_diag
+        )
+        if v1d_hint:
+            h3_priority = 1  # Hallucination pattern → criteria re-examination critical
     hypotheses.append({
         "id": "H3",
         "label": "Criteria interpretation error",
         "priority": h3_priority,
-        "reason": "Review gate benefits from criteria re-examination" if gate == "review" else "Low prior probability",
+        "reason": (
+            "Review gate benefits from criteria re-examination" if gate == "review"
+            else "Verification gate with evidence quality issues" if h3_priority == 1
+            else "Low prior probability"
+        ),
     })
 
     # H4: Capability gap — missing tool, script, or infrastructure
@@ -6621,6 +7002,15 @@ def _gather_raw_evidence(project_dir, step, gate):
                     result["pacs_log_excerpt"] = f.read(ERROR_RESULT_CHARS)
             except OSError:
                 pass
+
+    # VE cross-check: include hallucination evidence if available
+    # (validate_criteria_evidence.py writes JSON to stdout, not to disk,
+    #  but diagnosis can still benefit from V1d/V1e warnings in verification log)
+    if gate == "verification":
+        result["hallucination_check_hint"] = (
+            "Run: python3 .claude/hooks/scripts/validate_criteria_evidence.py "
+            f"--step {step} --project-dir {project_dir} --auto-detect"
+        )
 
     return result
 
@@ -6820,3 +7210,68 @@ def _extract_diagnosis_patterns(project_dir):
         pass
 
     return patterns
+
+
+# ---------------------------------------------------------------------------
+# Thesis state summary — shared by save_context.py & generate_context_summary.py
+# ---------------------------------------------------------------------------
+
+def get_thesis_state_summary(project_dir):
+    """Read thesis SOT(s) and return a brief state summary for snapshots.
+
+    P1 compliant: deterministic file reads only, no AI judgment.
+    Non-blocking: returns empty string on any error.
+    Read-only: reads session.json — never modifies it.
+
+    Returns markdown string with step, status, gates, and HITL info.
+    """
+    try:
+        thesis_root = os.path.join(project_dir, "thesis-output")
+        if not os.path.isdir(thesis_root):
+            return ""
+
+        summaries = []
+        for proj_name in sorted(os.listdir(thesis_root)):
+            sot_path = os.path.join(thesis_root, proj_name, "session.json")
+            if not os.path.isfile(sot_path):
+                continue
+            with open(sot_path, "r", encoding="utf-8") as f:
+                sot = json.load(f)
+
+            step = sot.get("current_step", 0)
+            total = sot.get("total_steps", "?")
+            status = sot.get("status", "unknown")
+            rtype = sot.get("research_type", "undecided")
+
+            # Gate summary
+            gates = sot.get("gates", {})
+            gate_str = ", ".join(
+                f"{k}:{v.get('status', v) if isinstance(v, dict) else v}"
+                for k, v in gates.items()
+            ) if gates else "none"
+
+            # HITL summary
+            hitl = sot.get("hitl_checkpoints", {})
+            completed_hitl = [
+                k for k, v in hitl.items()
+                if (v.get("status") if isinstance(v, dict) else v) == "completed"
+            ]
+            hitl_str = ", ".join(completed_hitl) if completed_hitl else "none"
+
+            summaries.append(
+                f"  - **{proj_name}**: step {step}/{total}, "
+                f"status={status}, type={rtype}\n"
+                f"    - Gates: {gate_str}\n"
+                f"    - HITL completed: {hitl_str}"
+            )
+
+        if not summaries:
+            return ""
+
+        return (
+            "\n\n## Thesis Workflow State\n\n"
+            + "\n".join(summaries)
+            + "\n"
+        )
+    except Exception:
+        return ""

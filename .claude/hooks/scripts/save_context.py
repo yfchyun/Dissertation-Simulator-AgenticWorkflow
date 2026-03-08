@@ -44,6 +44,7 @@ from _context_lib import (
     get_snapshot_dir,
     update_latest_with_guard,
     archive_and_index_session,
+    get_thesis_state_summary,
 )
 
 
@@ -92,6 +93,11 @@ def main():
         work_log=work_log,
         sot_content=sot_content,
     )
+
+    # Inject thesis state if any thesis project exists
+    thesis_summary = get_thesis_state_summary(project_dir)
+    if thesis_summary:
+        md_content += thesis_summary
 
     # Atomic write: timestamped snapshot
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

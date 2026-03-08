@@ -141,6 +141,23 @@ D7_SYNC_PAIRS: Dict[str, List[str]] = {
         "CLAUDE.md",
         "AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md",
     ],
+    # Predictive Debugging pipeline — shared JSON format contracts
+    ".claude/hooks/scripts/scan_code_structure.py": [
+        ".claude/hooks/scripts/validate_failure_predictions.py",  # consumes fp-code-map.json
+        ".claude/commands/predict-failures.md",                   # orchestrates Phase A
+    ],
+    ".claude/hooks/scripts/validate_failure_predictions.py": [
+        ".claude/hooks/scripts/scan_code_structure.py",           # produces fp-code-map.json
+        ".claude/hooks/scripts/generate_failure_report.py",       # consumes fp-validated.json
+        ".claude/commands/predict-failures.md",                   # orchestrates Phase C
+    ],
+    ".claude/hooks/scripts/generate_failure_report.py": [
+        ".claude/hooks/scripts/validate_failure_predictions.py",  # produces fp-validated.json
+        ".claude/commands/predict-failures.md",                   # orchestrates Phase D
+    ],
+    ".claude/hooks/scripts/extract_json_block.py": [
+        ".claude/commands/predict-failures.md",                   # orchestrates Phase B→C handoffs
+    ],
 }
 
 # ---------------------------------------------------------------------------

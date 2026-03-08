@@ -48,7 +48,8 @@ AgenticWorkflow는 그 자체로 완결되는 시스템이 아니다.
 │  검증     4계층 품질 보장 (L0 → L1 → L1.5 → L2)                          │
 │  안전     P1 할루시네이션 봉쇄 + Safety Hook + 결정론적 검증                │
 │  투명     Decision Log + 감사 추적 + IMMORTAL 보존                        │
-│  협업     SOT 단일 쓰기 + Agent Team 프로토콜                             │
+│  협업     SOT 단일 쓰기 + Agent Team(Swarm) 프로토콜                      │
+│          → TeamCreate 격리 팀 + TaskCreate 작업 분해 + blocks/blockedBy    │
 │  비판     Adversarial Review (Generator-Critic 패턴)                     │
 │  추적     Cross-Step Traceability (교차 단계 논리적 연결)                   │
 │  지식     Domain Knowledge Structure (도메인 특화 추론 구조)                │

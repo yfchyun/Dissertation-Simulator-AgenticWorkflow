@@ -138,9 +138,11 @@ Layer 3: SRCS Unified Evaluation
 
 ## 부모-자식 문서 분리 패턴
 
-이 프로젝트는 "만능줄기세포" (AgenticWorkflow)와 그로부터 태어난 "자식 시스템" (Dissertation Simulator)을 구분합니다.
+이 프로젝트는 "만능줄기세포" (AgenticWorkflow)와 그로부터 태어난 "자식 시스템"을 구분합니다.
 부모 문서(`AGENTICWORKFLOW-*.md`)는 방법론/프레임워크를, 자식 문서(`DISSERTATION-SIMULATOR-*.md`)는 도메인 고유 아키텍처를 기술합니다.
 이 분리는 자식 시스템이 독립적으로 이해·운영될 수 있게 합니다.
+
+**형제 자식 시스템**: [GlobalNews Crawling & Analysis](https://github.com/cysinsight/GlobalNews-Crawling-AgenticWorkflow) — 동일한 AgenticWorkflow DNA에서 태어난 두 번째 자식 시스템 (44개 뉴스 사이트 자동 수집, 56개 NLP 분석, 93개 Python 모듈).
 
 ## 문서 읽기 순서
 

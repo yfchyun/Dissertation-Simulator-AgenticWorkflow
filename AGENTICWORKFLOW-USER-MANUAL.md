@@ -321,7 +321,7 @@ maxTurns: 30
 | `sonnet` | 수집, 스캐닝, 구조화 — 안정적 품질의 반복 작업 |
 | `haiku` | 상태 확인, 단순 판단 — 복잡도가 낮은 보조 작업 |
 
-### 6.3 Agent Team 설정 (병렬 협업)
+### 6.3 Agent Team (Agent Swarm) 설정 (병렬 협업)
 
 workflow.md에 `(team)` 구간이 있다면:
 
@@ -333,6 +333,8 @@ workflow.md에 `(team)` 구간이 있다면:
   }
 }
 ```
+
+> **참고**: 환경변수명의 `EXPERIMENTAL`은 CLI 내부 네이밍 관례이며, 기능 안정성과 무관하다. 이 변수를 삭제하면 Agent Team 기능이 비활성화된다.
 
 **팀 작업 흐름:**
 ```
@@ -975,3 +977,54 @@ python .claude/hooks/scripts/checklist_manager.py --record-hitl hitl-1 --project
 # 체크포인트
 python .claude/hooks/scripts/checklist_manager.py --save-checkpoint --checkpoint cp-1 --project-dir thesis-output/my-thesis
 ```
+
+---
+
+## GlobalNews Crawling & Analysis Workflow 사용법
+
+### 개요
+
+20-step 뉴스 크롤링 & 빅데이터 분석 워크플로우입니다. Research (4단계) → Planning (4단계) → Implementation (12단계)의 3단계로, 35개 전문 에이전트 (코어 3 + 도메인 32)가 44개 국제 뉴스 사이트 수집 → 56개 NLP 분석 → 5-Layer 신호 분류 시스템을 구축합니다.
+
+| 항목 | 내용 |
+|------|------|
+| **코드 규모** | 93개 Python 모듈, ~42,200 LOC (src) + ~22,350 LOC (tests) |
+| **산출물** | Parquet (ZSTD) + SQLite (FTS5/vec) + Streamlit 대시보드 |
+| **테스트** | 50개 파일, ~2,041 테스트 |
+
+### 빠른 시작
+
+```bash
+# 1. 의존성 설치
+pip install -r requirements.txt
+playwright install chromium
+python -m spacy download en_core_web_sm
+
+# 2. 환경 검증
+python3 scripts/preflight_check.py --project-dir . --mode full
+
+# 3. 전체 파이프라인 실행
+python3 main.py --mode full --date 2026-02-27
+
+# 4. 대시보드
+streamlit run dashboard.py
+```
+
+### 핵심 CLI 명령
+
+| 명령 | 설명 |
+|------|------|
+| `python3 main.py --mode full` | 전체 파이프라인 (크롤링 + 8단계 분석) |
+| `python3 main.py --mode crawl --date YYYY-MM-DD` | 크롤링만 실행 |
+| `python3 main.py --mode analyze --all-stages` | 분석만 실행 |
+| `python3 main.py --mode status` | 시스템 상태 확인 |
+| `python3 main.py --mode crawl --groups A,B` | 특정 그룹만 크롤링 |
+
+### 도메인 고유 특징
+
+- **Conductor Pattern**: Claude Code는 지휘자, Python이 연주자 (Claude API = $0)
+- **4-Level 재시도**: 최대 90회 자동 시도 + Circuit Breaker
+- **Paywall Bypass**: BrowserRenderer(Patchright) + AdaptiveExtractor + is_paywall_body
+- **5-Layer 신호**: Fad → Short → Mid → Long → Singularity (2-of-3 합의)
+
+상세: `GLOBALNEWS-ARCHITECTURE-AND-PHILOSOPHY.md`, `GLOBALNEWS-USER-MANUAL.md`

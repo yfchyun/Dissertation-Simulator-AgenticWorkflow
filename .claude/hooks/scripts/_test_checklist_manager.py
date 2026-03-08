@@ -674,5 +674,98 @@ class TestTranslationProgress(unittest.TestCase):
         self.assertEqual(progress["missing_steps"], [])
 
 
+class TestDialogueCommands(unittest.TestCase):
+    """Test adversarial dialogue SOT management (start/round/end)."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.project_dir = self.tmpdir / "thesis-output" / "test-project"
+        self.project_dir.mkdir(parents=True, exist_ok=True)
+        cm.init_project(self.project_dir, "Test Project")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_start_dialogue_creates_sot_field(self):
+        """start_dialogue writes dialogue_state to SOT."""
+        cm.start_dialogue(self.project_dir, step=5, domain="research", max_rounds=3)
+        sot = cm.read_thesis_sot(self.project_dir)
+        ds = sot.get("dialogue_state")
+        self.assertIsNotNone(ds, "dialogue_state must be present in SOT after start")
+        self.assertEqual(ds["step"], 5)
+        self.assertEqual(ds["domain"], "research")
+        self.assertEqual(ds["max_rounds"], 3)
+        self.assertEqual(ds["rounds_used"], 0)
+        self.assertEqual(ds["status"], "in_progress")
+
+    def test_start_dialogue_creates_directory(self):
+        """start_dialogue creates dialogue-logs/ directory."""
+        cm.start_dialogue(self.project_dir, step=5, domain="research", max_rounds=3)
+        self.assertTrue((self.project_dir / "dialogue-logs").exists())
+
+    def test_start_dialogue_invalid_domain_raises(self):
+        """start_dialogue with invalid domain raises ValueError."""
+        with self.assertRaises(ValueError):
+            cm.start_dialogue(self.project_dir, step=5, domain="invalid", max_rounds=3)
+
+    def test_advance_dialogue_round_increments_counter(self):
+        """advance_dialogue_round increments rounds_used in SOT."""
+        cm.start_dialogue(self.project_dir, step=5, domain="research", max_rounds=3)
+        cm.advance_dialogue_round(self.project_dir, step=5, round_num=1, verdict="FAIL")
+        sot = cm.read_thesis_sot(self.project_dir)
+        ds = sot["dialogue_state"]
+        self.assertEqual(ds["rounds_used"], 1)
+        # verdict is stored in round_history, not a top-level last_verdict field
+        history = ds.get("round_history", [])
+        self.assertTrue(len(history) > 0, "round_history must have an entry")
+        self.assertEqual(history[-1]["verdict"], "FAIL")
+
+    def test_advance_dialogue_round_multiple_rounds(self):
+        """Multiple advance_dialogue_round calls accumulate correctly."""
+        cm.start_dialogue(self.project_dir, step=5, domain="research", max_rounds=3)
+        cm.advance_dialogue_round(self.project_dir, step=5, round_num=1, verdict="FAIL")
+        cm.advance_dialogue_round(self.project_dir, step=5, round_num=2, verdict="FAIL")
+        sot = cm.read_thesis_sot(self.project_dir)
+        self.assertEqual(sot["dialogue_state"]["rounds_used"], 2)
+
+    def test_end_dialogue_consensus_updates_outcome(self):
+        """end_dialogue with consensus sets outcome and status."""
+        cm.start_dialogue(self.project_dir, step=5, domain="research", max_rounds=3)
+        cm.advance_dialogue_round(self.project_dir, step=5, round_num=1, verdict="PASS")
+        cm.end_dialogue(self.project_dir, step=5, outcome="consensus")
+        sot = cm.read_thesis_sot(self.project_dir)
+        ds = sot["dialogue_state"]
+        self.assertEqual(ds["outcome"], "consensus")
+        # end_dialogue sets status = outcome ("consensus" or "escalated")
+        self.assertEqual(ds["status"], "consensus")
+
+    def test_end_dialogue_escalated_updates_outcome(self):
+        """end_dialogue with escalated sets correct outcome."""
+        cm.start_dialogue(self.project_dir, step=5, domain="research", max_rounds=3)
+        cm.end_dialogue(self.project_dir, step=5, outcome="escalated")
+        sot = cm.read_thesis_sot(self.project_dir)
+        ds = sot["dialogue_state"]
+        self.assertEqual(ds["outcome"], "escalated")
+
+    def test_end_dialogue_invalid_outcome_raises(self):
+        """end_dialogue with invalid outcome raises ValueError."""
+        cm.start_dialogue(self.project_dir, step=5, domain="research", max_rounds=3)
+        with self.assertRaises(ValueError):
+            cm.end_dialogue(self.project_dir, step=5, outcome="unknown-outcome")
+
+    def test_development_domain_accepted(self):
+        """Development domain is valid for start_dialogue."""
+        cm.start_dialogue(self.project_dir, step=3, domain="development", max_rounds=2)
+        sot = cm.read_thesis_sot(self.project_dir)
+        self.assertEqual(sot["dialogue_state"]["domain"], "development")
+
+    def test_init_project_creates_dialogue_logs_dir(self):
+        """init_project must create dialogue-logs/ directory."""
+        new_project = self.tmpdir / "new-project"
+        cm.init_project(new_project, "New Project")
+        self.assertTrue((new_project / "dialogue-logs").exists(),
+                        "dialogue-logs/ must be created by init_project")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -52,13 +52,14 @@ import sys
 # Constants
 DEFAULT_MAX_RETRIES = 10
 ULW_MAX_RETRIES = 15
-VALID_GATES = ("verification", "pacs", "review")
+VALID_GATES = ("verification", "pacs", "review", "dialogue")
 
 # Gate → directory mapping
 GATE_DIRS = {
     "verification": "verification-logs",
     "pacs": "pacs-logs",
     "review": "review-logs",
+    "dialogue": "dialogue-logs",  # Dialogue rounds use separate counter in dialogue-logs/
 }
 
 # ULW detection regex — matches "ULW 상태" section in snapshot

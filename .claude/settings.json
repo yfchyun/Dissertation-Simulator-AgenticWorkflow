@@ -77,6 +77,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if test -f \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/scripts/run_mypy_check.py; then python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/scripts/run_mypy_check.py; fi",
+            "timeout": 20
+          }
+        ]
       }
     ],
     "PreCompact": [

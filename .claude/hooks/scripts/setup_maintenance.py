@@ -92,6 +92,14 @@ REQUIRED_SCRIPTS = [
     "verify_translation_terms.py",
     # Fork safety P1 validator (Phase G)
     "validate_fork_safety.py",
+    # EVP criteria-evidence cross-check (Phase H)
+    "validate_criteria_evidence.py",
+    # pCCS — predicted Claim Confidence Score (Phase I)
+    "compute_pccs_signals.py",
+    "generate_pccs_report.py",
+    "validate_pccs_output.py",
+    "validate_pccs_assessment.py",
+    "pccs_calibration.py",
 ]
 
 # Severity levels
@@ -127,7 +135,10 @@ def main():
     for script_name in REQUIRED_SCRIPTS:
         results.append(_check_script_syntax(scripts_dir, script_name))
 
-    # 5. Documentation-code synchronization (P1 drift prevention)
+    # 5. Runtime log directories (P1 deterministic stale file scan)
+    results.extend(_check_runtime_log_dirs(project_dir))
+
+    # 6. Documentation-code synchronization (P1 drift prevention)
     results.extend(_check_doc_code_sync(project_dir))
 
     # Write log file
@@ -198,14 +209,15 @@ def _check_stale_archives(project_dir):
 
     if stale_files:
         stale_size = sum(f[2] for f in stale_files)
-        names = ", ".join(
-            f"{f[0]} ({f[1]}d)" for f in stale_files[:5]
-        )
-        extra = f" +{len(stale_files) - 5} more" if len(stale_files) > 5 else ""
+        # P1: Sort by age_days descending (most stale first) — do NOT rely on filename ordering
+        stale_files.sort(key=lambda x: x[1], reverse=True)
+        oldest_3 = [f[0] for f in stale_files[:3]]
+        newest_3 = [f[0] for f in stale_files[-3:]] if len(stale_files) > 3 else oldest_3
         return _result(
             WARNING, "WARN", "Session archives",
             f"{len(stale_files)}/{total_files} archives older than {STALE_ARCHIVE_DAYS} days "
-            f"({stale_size / 1024:.0f}KB reclaimable): {names}{extra}",
+            f"({stale_size / 1024:.0f}KB reclaimable) | "
+            f"oldest: {', '.join(oldest_3)} | newest: {', '.join(newest_3)}",
         )
 
     size_kb = total_size / 1024
@@ -237,24 +249,28 @@ def _check_knowledge_index(project_dir):
     try:
         with open(ki_path, "r", encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
-                line = line.strip()
-                if not line:
+                stripped = line.strip()
+                if not stripped:
                     continue
                 total_lines += 1
                 try:
-                    json.loads(line)
+                    json.loads(stripped)
                 except json.JSONDecodeError:
-                    invalid_lines.append(line_num)
+                    # P1: Capture content preview (first 80 chars) for deterministic display
+                    preview = stripped[:80] + ("..." if len(stripped) > 80 else "")
+                    invalid_lines.append((line_num, preview))
     except Exception as e:
         return _result(WARNING, "FAIL", "Knowledge index", f"cannot read: {e}")
 
     if invalid_lines:
-        line_refs = ", ".join(str(n) for n in invalid_lines[:10])
-        extra = f" +{len(invalid_lines) - 10} more" if len(invalid_lines) > 10 else ""
+        line_details = "; ".join(
+            f"L{ln}: {prev}" for ln, prev in invalid_lines[:5]
+        )
+        extra = f" +{len(invalid_lines) - 5} more" if len(invalid_lines) > 5 else ""
         return _result(
             WARNING, "WARN", "Knowledge index",
-            f"{len(invalid_lines)}/{total_lines} lines have invalid JSON "
-            f"(lines: {line_refs}{extra})",
+            f"{len(invalid_lines)}/{total_lines} lines have invalid JSON | "
+            f"{line_details}{extra}",
         )
 
     size_kb = os.path.getsize(ki_path) / 1024
@@ -282,7 +298,11 @@ def _check_knowledge_index(project_dir):
 
 
 def _check_work_log_size(project_dir):
-    """Check work_log.jsonl size — warn if exceeds threshold."""
+    """Check work_log.jsonl size — warn if exceeds threshold.
+
+    P1 Enhancement: Deterministically extracts line count and
+    first/last timestamps to prevent agent hallucination on these values.
+    """
     log_path = os.path.join(
         project_dir, ".claude", "context-snapshots", "work_log.jsonl"
     )
@@ -294,15 +314,109 @@ def _check_work_log_size(project_dir):
         size = os.path.getsize(log_path)
         size_kb = size / 1024
 
+        # P1: Count lines and extract first/last timestamps deterministically
+        line_count = 0
+        first_ts = None
+        last_ts = None
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    line_count += 1
+                    try:
+                        entry = json.loads(stripped)
+                        ts = entry.get("timestamp") or entry.get("ts") or entry.get("time")
+                        if ts:
+                            if first_ts is None:
+                                first_ts = str(ts)
+                            last_ts = str(ts)
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+        except Exception:
+            pass  # Size check still valid even if content scan fails
+
+        ts_info = ""
+        if first_ts and last_ts:
+            ts_info = f" | first: {first_ts[:19]} last: {last_ts[:19]}"
+
+        detail = f"{size_kb:.0f}KB, {line_count} lines{ts_info}"
+
         if size > WORK_LOG_SIZE_WARN:
             return _result(
                 WARNING, "WARN", "Work log",
-                f"{size_kb:.0f}KB — exceeds 1MB threshold. Consider cleanup.",
+                f"{detail} — exceeds 1MB threshold. Consider cleanup.",
             )
 
-        return _result(INFO, "PASS", "Work log", f"{size_kb:.0f}KB")
+        return _result(INFO, "PASS", "Work log", detail)
     except Exception as e:
         return _result(WARNING, "FAIL", "Work log", f"cannot check: {e}")
+
+
+def _check_runtime_log_dirs(project_dir):
+    """P1: Deterministic scan of runtime log directories for stale files.
+
+    Checks verification-logs/, pacs-logs/, autopilot-logs/ for files older
+    than STALE_ARCHIVE_DAYS. Reports file count, total size, and oldest 3
+    file names — all computed deterministically to prevent agent hallucination.
+
+    SOT Compliance: No SOT access. These are log directories, not state.
+    """
+    RUNTIME_LOG_DIRS = ["verification-logs", "pacs-logs", "autopilot-logs"]
+    results = []
+    now = time.time()
+
+    for dirname in RUNTIME_LOG_DIRS:
+        dirpath = os.path.join(project_dir, dirname)
+
+        if not os.path.isdir(dirpath):
+            results.append(_result(
+                INFO, "PASS", f"{dirname}/",
+                "directory not found (OK — created when workflow runs)",
+            ))
+            continue
+
+        try:
+            all_files = []
+            stale_files = []
+            total_size = 0
+
+            for fname in sorted(os.listdir(dirpath)):
+                fpath = os.path.join(dirpath, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                fsize = os.path.getsize(fpath)
+                total_size += fsize
+                age_seconds = now - os.path.getmtime(fpath)
+                age_days = int(age_seconds / 86400)
+                all_files.append((fname, age_days, fsize))
+                if age_seconds > STALE_ARCHIVE_SECONDS:
+                    stale_files.append((fname, age_days, fsize))
+
+            if stale_files:
+                stale_size = sum(f[2] for f in stale_files)
+                # Oldest first (already sorted by name; re-sort by age descending)
+                stale_files.sort(key=lambda x: x[1], reverse=True)
+                oldest_3 = [f"{f[0]} ({f[1]}d)" for f in stale_files[:3]]
+                results.append(_result(
+                    WARNING, "WARN", f"{dirname}/",
+                    f"{len(stale_files)}/{len(all_files)} files older than "
+                    f"{STALE_ARCHIVE_DAYS} days ({stale_size / 1024:.0f}KB) | "
+                    f"oldest: {', '.join(oldest_3)}",
+                ))
+            else:
+                results.append(_result(
+                    INFO, "PASS", f"{dirname}/",
+                    f"{len(all_files)} files ({total_size / 1024:.0f}KB), "
+                    f"all within {STALE_ARCHIVE_DAYS} days",
+                ))
+        except Exception as e:
+            results.append(_result(
+                WARNING, "FAIL", f"{dirname}/", f"cannot scan: {e}"
+            ))
+
+    return results
 
 
 def _check_script_syntax(scripts_dir, script_name):

@@ -55,9 +55,10 @@ workflow.md 파일의 표준 구조.
 ### 1. [단계명]
 - **Pre-processing**: [Python script 등으로 데이터 정제 — 생략 가능]
 - **Agent**: `@[agent-name]`
-- **Verification**:
-  - [ ] [구체적, 측정 가능한 기준 — 구조적 완전성/기능적 목표/데이터 정합성/파이프라인 연결/교차 단계 추적성]
-  - [ ] [구체적, 측정 가능한 기준]
+- **Verification** (EVP-1: 각 기준은 단일 행동만 검증 / EVP-2: 실행 순서와 일치):
+  - [ ] V1: [구체적, 측정 가능한 기준 — 구조적 완전성/기능적 목표/데이터 정합성]
+  - [ ] V2: [구체적, 측정 가능한 기준] (requires: V1)
+  - [ ] V3: [파이프라인 연결 기준] (pipeline)
 - **Task**: [수행 작업]
 - **Output**: [단계 산출물]
 - **Translation**: `@translator` → [산출물].ko.md | none
@@ -67,7 +68,7 @@ workflow.md 파일의 표준 구조.
 - **Pre-processing**: [데이터 전처리]
 - **Agent**: `@[agent-name]`
 - **Verification**:
-  - [ ] [구체적, 측정 가능한 기준]
+  - [ ] [구체적, 측정 가능한 기준 — 단일 행동만, 복합 기준 금지]
   - [ ] [구체적, 측정 가능한 기준]
 - **Task**: [수행 작업]
 - **Output**: [단계 산출물]
@@ -118,6 +119,40 @@ workflow.md 파일의 표준 구조.
 - **Task**: [수행 작업]
 - **Output**: [최종 산출물]
 - **Translation**: `@translator` → [산출물].ko.md | none
+
+---
+
+## Verification Report Format
+
+각 단계의 Verification Gate 결과를 `verification-logs/step-N-verify.md`에 기록한다.
+
+```markdown
+# Step N Verification Report
+
+## Criteria Results
+| # | Criterion | Result | Evidence |
+|---|-----------|--------|----------|
+| V1 | [기준 텍스트] | PASS/FAIL | [≥20자 구체적 근거 — V1d 준수] |
+| V2 | [기준 텍스트] | PASS/FAIL | [파일 경로·줄 번호·수치 등 검증 가능한 근거] |
+
+## P1 Cross-Check (VE1-VE5)
+```bash
+python3 validate_criteria_evidence.py --step N --output-dir ./output/
+```
+- VE1 (Heading count): PASS/FAIL
+- VE2 (Placeholder absence): PASS/FAIL
+- VE3 (Item count): PASS/FAIL
+- VE4 (Trace markers): PASS/FAIL (해당 시)
+- VE5 (Field presence): PASS/FAIL (해당 시)
+
+## Summary
+- Total: N criteria, N PASS, N FAIL
+- pACS self-rating: [점수]/10 (L1.5)
+- Gate decision: PROCEED / RETRY / ESCALATE
+```
+
+> **V1d 준수**: Evidence는 반드시 ≥20자. "확인함", "OK" 같은 단답 불가.
+> **복합 기준 경고 (V1e)**: "A이고 B인지 확인" → EVP-1 위반. 각각 분리.
 
 ---
 
@@ -242,9 +277,10 @@ workflow:
 1. TeamCreate(team_name="step-N-team")
    → SOT active_team.name = "step-N-team", status = "partial"
 
-2. TaskCreate(subject, description, activeForm, owner=@teammate-name)
+2. TaskCreate(subject, description, activeForm, owner=@teammate-name, blocks, blockedBy)
    → Task ID 생성 (예: #1, #2, ...)
    → SOT active_team.tasks_pending에 ID 추가
+   → blocks/blockedBy: Design-time 의존성 선언 (상세: claude-code-patterns.md §TaskUpdate — 상태 관리 및 의존성)
 
 3. Task(subagent_type, team_name, name=@teammate-name)
    → Teammate 생성 + 자동으로 Task 할당 수신
@@ -269,6 +305,8 @@ workflow:
    c. SOT active_team.status = "all_completed"
    d. TeamDelete → SOT active_team → completed_teams 이동
 ```
+
+> **Task 상태 전이 규칙**: `pending → in_progress → completed`. blockedBy가 있는 Task는 `blocked` 상태로 시작하며, 선행 Task 완료 시 Team Lead가 `pending`으로 전환 후 owner에게 SendMessage로 시작 통보한다. (상세: claude-code-patterns.md §TaskUpdate — 상태 관리 및 의존성)
 
 > **Task ID ↔ SOT 매핑**: Task ID는 `TaskCreate` 시 자동 생성된다. SOT `active_team.tasks_completed`에는 Task subject를 기록하고, `completed_summaries`에는 `{task_subject: {agent, output_path, pacs_score, summary}}`를 기록한다.
 
@@ -359,7 +397,9 @@ runtime_directories:
   # 조건부 — 기능 활성 시
   autopilot-logs/:           # step-N-decision.md (Autopilot 자동 승인 결정 로그)
   pacs-logs/:                # step-N-pacs.md (pACS 자체 신뢰 평가 결과)
-  review-logs/:              # step-N-review.md (Adversarial Review — Enhanced L2 결과)
+  review-logs/:              # step-N-review.md (Adversarial Review — Enhanced L2 최종 결과)
+  dialogue-logs/:            # step-N-r{K}-fc.md, -rv.md, -cr.md, -draft-r{K}.md, -summary.md
+                             # (Adversarial Dialogue 중간 파일 — review-logs/ 와 격리 필수)
   translations/:             # glossary.yaml + *.ko.md (@translator 번역 산출물)
 ```
 
@@ -459,6 +499,7 @@ pacs_logging:
 | `/command-name` | Slash command 실행 |
 | `[skill-name]` | Skill 참조 |
 | `Review: @reviewer \| @fact-checker \| none` | 단계별 적대적 검토 적용 여부 (Enhanced L2 — AGENTS.md §5.5) |
+| `Dialogue: research \| development \| none` | 적대적 대화 루프 활성화 여부 (L2 반복 루프 — AGENTS.md §5.5 Adversarial Dialogue). Review FAIL 시 최대 N 라운드 Generator↔Critic 반복. `none` 또는 미지정 시 단일 리뷰만. |
 | `Translation: ... \| none` | 단계별 번역 적용 여부 (텍스트 산출물만 대상) |
 
 ## 예시: 블로그 컨텐츠 생성 워크플로우

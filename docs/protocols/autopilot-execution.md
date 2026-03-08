@@ -61,7 +61,9 @@ Autopilot 모드에서 워크플로우를 실행할 때, 각 단계마다 아래
 - [ ] 모든 기준 PASS 확인
 - [ ] `verification-logs/step-N-verify.md` 생성
 - [ ] P1 검증 실행: `python3 .claude/hooks/scripts/validate_verification.py --step N --project-dir .`
-- [ ] P1 검증 결과 `valid: true` 확인 (V1a-V1c 모두 통과)
+- [ ] P1 검증 결과 `valid: true` 확인 (V1a-V1e 모두 통과, V1e는 WARNING only)
+- [ ] P1 할루시네이션 교차 검증: `python3 .claude/hooks/scripts/validate_criteria_evidence.py --step N --project-dir .`
+- [ ] `hallucinations_detected: 0` 확인 — 1 이상이면 해당 기준 재실행
 
 ### 단계 완료 후 (Cross-Step Traceability — Verification에 "교차 단계 추적성" 기준이 포함된 단계만)
 - [ ] 산출물에 `[trace:step-N:section-id]` 마커가 최소 3개 이상 포함 확인
@@ -126,6 +128,26 @@ Autopilot 모드에서 워크플로우를 실행할 때, 각 단계마다 아래
 - [ ] P1 검증 결과 `valid: true` 확인 (AD1-AD10 모두 통과)
 - [ ] 진단 결과에 따라 선택된 가설(H1/H2/H3/H4) 기반 재작업 실행
 
+### 단계 완료 후 (Adversarial Dialogue — `Dialogue:` 필드인 단계만)
+
+- [ ] Adversarial Dialogue 시작: `python3 .claude/hooks/scripts/checklist_manager.py --dialogue-start --project-dir . --step N --domain {research|development} --max-rounds {2|3}`
+- [ ] SOT `dialogue_state` 갱신 확인 (status=in_progress, rounds_used=0)
+- [ ] **각 라운드 (Round K):**
+  - [ ] Research 도메인: `@fact-checker` + `@reviewer` 동시 병렬 실행 (권장: `isolation: "worktree"`)
+  - [ ] Development 도메인: `@code-reviewer` 실행 (권장: `isolation: "worktree"`)
+  - [ ] Critic 보고서를 `dialogue-logs/step-N-rK-{fc|rv|cr}.md`에 저장
+  - [ ] P1 Dialogue State 검증: `python3 .claude/hooks/scripts/validate_dialogue_state.py --step N --round K --project-dir .`
+  - [ ] P1 검증 결과 `valid: true` 확인 (DA1-DA5 모두 통과)
+  - [ ] Verdict 확인:
+    - [ ] **consensus (PASS)**: `--dialogue-end --outcome consensus` 실행 → `dialogue-logs/step-N-summary.md` 생성 → 다음 단계 진행
+    - [ ] **FAIL (재작업 필요)**: 재시도 예산 확인: `python3 .claude/hooks/scripts/validate_retry_budget.py --step N --gate dialogue --project-dir . --check-and-increment`
+    - [ ] `can_retry: true` → Critic 피드백 기반 산출물 재작업 → 다음 라운드 진행
+    - [ ] `can_retry: false` → `--dialogue-end --outcome escalated` 실행 → 사용자 에스컬레이션
+  - [ ] 라운드 종료: `python3 .claude/hooks/scripts/checklist_manager.py --dialogue-round --project-dir . --step N --round K --verdict {PASS|FAIL}`
+  - [ ] Round 2+: P1 Claim Inheritance 검증: `python3 .claude/hooks/scripts/validate_claim_inheritance.py --step N --round K --project-dir .`
+  - [ ] `hallucinations_detected: 0` 확인 (CI1-CI4 모두 통과)
+- [ ] 최종 `dialogue-logs/step-N-summary.md` 존재 확인 (Outcome: consensus 또는 escalated)
+
 ### 단계 완료 후 (번역 — `Translation: @translator`인 단계만)
 - [ ] `@translator` 서브에이전트 호출 (`translations/glossary.yaml` 참조 포함)
 - [ ] 번역 파일(`*.ko.md`) 디스크에 존재 확인
@@ -136,6 +158,11 @@ Autopilot 모드에서 워크플로우를 실행할 때, 각 단계마다 아래
 - [ ] Translation pACS 로그 생성 (`pacs-logs/step-N-translation-pacs.md`)
 - [ ] P1 검증 실행: `python3 .claude/hooks/scripts/validate_translation.py --step N --project-dir . --check-pacs --check-sequence`
 - [ ] P1 검증 결과 `valid: true` 확인 (T1-T9 + sequence 모두 통과)
+
+### Predictive Failure Analysis (선택적 — 세션 간 도구)
+- [ ] 주기적으로 `/predict-failures` 실행하여 코드베이스 위험 예측 (on-demand, Autopilot 루프 외부)
+- [ ] `failure-predictions/active-risks.md` 세션 시작 시 자동 표면화 확인 (restore_context.py)
+- [ ] Critical 위험 식별 시 해당 파일 수정 전 위험 인식 (predictive_debug_guard.py)
 
 ---
 
@@ -158,3 +185,6 @@ Autopilot 모드에서 워크플로우를 실행할 때, 각 단계마다 아래
 - 품질 게이트 FAIL 재시도 시 진단 없이 동일 접근법으로 재시도 금지 — Abductive Diagnosis 또는 Fast-Path 필수
 - 진단 로그에 가설 1개만 기록 금지 — 최소 2개 가설 비교 (AD8)
 - 진단에서 이전 진단과 동일 가설 3회 연속 선택 금지 — FP3 에스컬레이션 (I-3 연동)
+- `Dialogue:` 단계에서 `--advance` 실행 금지 — dialogue 진행 중 SOT current_step 변경 불가
+- Dialogue에서 단일 Critic만 실행 금지 (Research 도메인) — @fact-checker + @reviewer 병렬 실행 필수
+- `dialogue-logs/step-N-summary.md` 없이 Dialogue 완료 처리 금지 — summary 파일이 완료의 증거

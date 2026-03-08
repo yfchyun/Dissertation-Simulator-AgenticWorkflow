@@ -89,6 +89,14 @@ REQUIRED_SCRIPTS = [
     "verify_translation_terms.py",
     # Fork safety P1 validator (Phase G)
     "validate_fork_safety.py",
+    # EVP criteria-evidence cross-check (Phase H)
+    "validate_criteria_evidence.py",
+    # pCCS — predicted Claim Confidence Score (Phase I)
+    "compute_pccs_signals.py",
+    "generate_pccs_report.py",
+    "validate_pccs_output.py",
+    "validate_pccs_assessment.py",
+    "pccs_calibration.py",
 ]
 
 # Severity levels

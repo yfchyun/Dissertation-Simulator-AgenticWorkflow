@@ -11,6 +11,8 @@ Usage:
     python3 .claude/hooks/scripts/query_workflow.py --project-dir . --retry-summary
     python3 .claude/hooks/scripts/query_workflow.py --project-dir . --blocked
     python3 .claude/hooks/scripts/query_workflow.py --project-dir . --error-trends
+    python3 .claude/hooks/scripts/query_workflow.py --project-dir . --dialogue
+    python3 .claude/hooks/scripts/query_workflow.py --project-dir . --pccs
 
 Output: JSON to stdout
 
@@ -20,6 +22,8 @@ Modes:
     --retry-summary  Retry budget usage across all gates
     --blocked        Identify what's blocking progress (failed gates, missing files)
     --error-trends   Cross-session error pattern aggregation from knowledge-index.jsonl
+    --dialogue       Adversarial Dialogue status — current round, domain, file inventory
+    --pccs           pCCS per-claim confidence — calibration delta, step history, decisions
 
 P1 Compliance: All data extraction is deterministic (regex + file-system checks).
     SOT schema validated via validate_sot_schema() before any query.
@@ -548,6 +552,158 @@ def _error_trends(project_dir):
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Dialogue Status — Adversarial Dialogue observability
+# ---------------------------------------------------------------------------
+
+_DIALOGUE_OUTCOME_RE = re.compile(
+    r"Outcome\s*:\s*(consensus|escalated)", re.IGNORECASE
+)
+_DIALOGUE_ROUNDS_RE = re.compile(r"Rounds\s+Used\s*:\s*(\d+)", re.IGNORECASE)
+
+
+def _dialogue_status(project_dir, sot):
+    """Query Adversarial Dialogue state for all steps.
+
+    P1 Compliance: Reads dialogue-logs/ + session.json.dialogue_state.
+    Returns: mode, current round, domain, file inventory per step.
+    """
+    dialogue_dir = os.path.join(project_dir, "dialogue-logs")
+    result = {
+        "mode": "dialogue",
+        "dialogue_dir": dialogue_dir,
+        "dialogue_dir_exists": os.path.exists(dialogue_dir),
+        "steps": {},
+        "in_progress": None,
+        "summary": {"completed": 0, "in_progress": 0, "escalated": 0},
+    }
+
+    # Read in-progress state from session.json.dialogue_state
+    session_json = os.path.join(project_dir, "session.json")
+    if os.path.exists(session_json):
+        try:
+            with open(session_json, "r", encoding="utf-8") as f:
+                session_data = json.load(f)
+            ds = session_data.get("dialogue_state")
+            if isinstance(ds, dict) and ds.get("status") == "in_progress":
+                result["in_progress"] = {
+                    "step": ds.get("step"),
+                    "rounds_used": ds.get("rounds_used", 0),
+                    "max_rounds": ds.get("max_rounds"),
+                    "domain": ds.get("domain"),
+                    "status": ds.get("status"),
+                    "round_history": ds.get("round_history", []),
+                }
+                result["summary"]["in_progress"] += 1
+        except Exception as exc:
+            result["session_json_error"] = str(exc)
+
+    # Scan dialogue-logs/ for completed/escalated dialogue files
+    if os.path.exists(dialogue_dir):
+        # Collect step numbers from summary files
+        summary_pattern = re.compile(r"step-(\d+)-summary\.md$")
+        round_pattern = re.compile(r"step-(\d+)-r(\d+)-(fc|rv|cr)\.md$")
+
+        for fname in sorted(os.listdir(dialogue_dir)):
+            sm = summary_pattern.match(fname)
+            if sm:
+                step_num = int(sm.group(1))
+                fpath = os.path.join(dialogue_dir, fname)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        content = f.read(1000)
+                    outcome_m = _DIALOGUE_OUTCOME_RE.search(content)
+                    rounds_m = _DIALOGUE_ROUNDS_RE.search(content)
+                    outcome = outcome_m.group(1) if outcome_m else "unknown"
+                    rounds = int(rounds_m.group(1)) if rounds_m else None
+                    step_key = f"step-{step_num}"
+                    if step_key not in result["steps"]:
+                        result["steps"][step_key] = {}
+                    result["steps"][step_key].update({
+                        "outcome": outcome,
+                        "rounds_used": rounds,
+                        "summary_file": fname,
+                    })
+                    if outcome == "consensus":
+                        result["summary"]["completed"] += 1
+                    elif outcome == "escalated":
+                        result["summary"]["escalated"] += 1
+                except Exception:
+                    pass
+
+            rm = round_pattern.match(fname)
+            if rm:
+                step_num = int(rm.group(1))
+                round_num = int(rm.group(2))
+                critic = rm.group(3)
+                step_key = f"step-{step_num}"
+                if step_key not in result["steps"]:
+                    result["steps"][step_key] = {}
+                rounds_key = f"round_{round_num}_files"
+                if rounds_key not in result["steps"][step_key]:
+                    result["steps"][step_key][rounds_key] = []
+                result["steps"][step_key][rounds_key].append(fname)
+
+    return result
+
+
+def _pccs_status(project_dir, sot):
+    """Query pCCS (per-claim confidence score) state across steps.
+
+    P1 Compliance: Reads session.json.pccs block + pccs report files.
+    Returns: calibration delta, history per step, mean scores, decision actions.
+    """
+    result = {
+        "mode": "pccs",
+        "pccs_active": False,
+        "cal_delta": 0.0,
+        "total_cal_samples": 0,
+        "last_step": None,
+        "history": {},
+        "step_count": 0,
+        "mean_pccs_across_steps": None,
+        "action_counts": {"proceed": 0, "rewrite_claims": 0, "rewrite_step": 0},
+    }
+
+    pccs = sot.get("pccs")
+    if not isinstance(pccs, dict):
+        return result
+
+    result["pccs_active"] = True
+    result["cal_delta"] = pccs.get("cal_delta", 0.0)
+    result["total_cal_samples"] = pccs.get("total_cal_samples", 0)
+    result["last_step"] = pccs.get("last_step")
+
+    history = pccs.get("history")
+    if isinstance(history, dict) and history:
+        all_means = []
+        for key in sorted(history.keys()):
+            entry = history[key]
+            if isinstance(entry, dict):
+                mean = entry.get("mean_pccs")
+                action = entry.get("action", "unknown")
+                result["history"][key] = {
+                    "mean_pccs": mean,
+                    "green": entry.get("green", 0),
+                    "yellow": entry.get("yellow", 0),
+                    "red": entry.get("red", 0),
+                    "total": entry.get("total_claims", 0),
+                    "action": action,
+                }
+                if isinstance(mean, (int, float)):
+                    all_means.append(mean)
+                if action in result["action_counts"]:
+                    result["action_counts"][action] += 1
+
+        result["step_count"] = len(history)
+        if all_means:
+            result["mean_pccs_across_steps"] = round(
+                sum(all_means) / len(all_means), 1
+            )
+
+    return result
+
+
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -558,6 +714,10 @@ def main():
     parser.add_argument("--retry-summary", action="store_true", help="Retry budget usage")
     parser.add_argument("--blocked", action="store_true", help="Progress blockers")
     parser.add_argument("--error-trends", action="store_true", help="Cross-session error trends")
+    parser.add_argument("--dialogue", action="store_true",
+                        help="Adversarial Dialogue status — current round, domain, file inventory")
+    parser.add_argument("--pccs", action="store_true",
+                        help="pCCS per-claim confidence score state — calibration, history, decisions")
     args = parser.parse_args()
 
     project_dir = os.path.abspath(args.project_dir)
@@ -589,6 +749,10 @@ def main():
         result = _retry_summary(project_dir, sot)
     elif args.blocked:
         result = _blocked(project_dir, sot)
+    elif args.dialogue:
+        result = _dialogue_status(project_dir, sot)
+    elif args.pccs:
+        result = _pccs_status(project_dir, sot)
     else:
         result = _dashboard(project_dir, sot)  # default
 

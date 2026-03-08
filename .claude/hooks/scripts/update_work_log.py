@@ -205,8 +205,12 @@ def _maybe_refresh_risk_cache(tool_response, snapshot_dir):
         risk_scores = aggregate_risk_scores(ki_path)
         if risk_scores:
             cache_path = os.path.join(snapshot_dir, "risk-scores.json")
+            import fcntl as _fcntl
             with open(cache_path, "w", encoding="utf-8") as f:
+                _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
                 json.dump(risk_scores, f, indent=2, ensure_ascii=False)
+                f.flush()
+                _fcntl.flock(f.fileno(), _fcntl.LOCK_UN)
     except Exception:
         pass  # Non-blocking — risk cache refresh is supplementary
 

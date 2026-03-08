@@ -16,13 +16,22 @@ import re
 import sys
 from pathlib import Path
 
-from _claim_patterns import CLAIM_ID_VALIDATE_RE, extract_claim_ids  # noqa: E402
+from _claim_patterns import (  # noqa: E402
+    BLOCKED_CLAIM_PATTERNS,
+    CLAIM_ID_VALIDATE_RE,
+    REQUIRE_SOURCE_PATTERNS,
+    extract_claim_ids,
+)
 
 # Thesis output directory pattern
 THESIS_OUTPUT_DIR = "thesis-output"
 WAVE_RESULTS_DIR = "wave-results"
 
-# Valid claim types (from workflow.md GRA spec)
+# Valid claim types for GRA authoring validation (workflow.md GRA spec).
+# Note: This is DIFFERENT from _claim_patterns.CANONICAL_CLAIM_TYPES (7 types
+# including UNKNOWN). VALID_CLAIM_TYPES defines what types agents SHOULD write.
+# CANONICAL_CLAIM_TYPES defines what types exist in the pCCS scoring system
+# (includes UNKNOWN as a fallback for unmapped types like ANALYTICAL, THEOLOGICAL).
 VALID_CLAIM_TYPES = {
     "FACTUAL", "EMPIRICAL", "THEORETICAL",
     "METHODOLOGICAL", "INTERPRETIVE", "SPECULATIVE",
@@ -37,27 +46,6 @@ MIN_CONFIDENCE = {
     "INTERPRETIVE": 70,
     "SPECULATIVE": 60,
 }
-
-# Hallucination Firewall — blocked patterns
-BLOCKED_PATTERNS = [
-    r"\ball\s+(?:studies|research|evidence)\s+(?:agree|confirm|show)\b",
-    r"\b100\s*%\b",
-    r"\bno\s+exceptions?\b",
-    r"\buniversally\s+(?:accepted|agreed|true)\b",
-    r"\bwithout\s+(?:any\s+)?exception\b",
-    r"\bevery\s+single\b",
-]
-
-# Patterns requiring source citation
-REQUIRE_SOURCE_PATTERNS = [
-    r"p\s*[<>=]\s*\.\d+",           # p-values
-    r"[drgfF]\s*=\s*[\d.]+",        # effect sizes
-    r"\beffect\s+size\b",
-    r"\bcohen['']?s\s+d\b",
-    r"\br\s*=\s*[+-]?[\d.]+",       # correlations
-    r"\bOR\s*=\s*[\d.]+",           # odds ratio
-    r"\bRR\s*=\s*[\d.]+",           # risk ratio
-]
 
 # Claim ID validation — imported from _claim_patterns (centralized)
 CLAIM_ID_PATTERN = CLAIM_ID_VALIDATE_RE
@@ -84,18 +72,18 @@ def validate_claim_block(text: str) -> list[str]:
     """
     warnings = []
 
-    # Check for Hallucination Firewall violations
-    for pattern in BLOCKED_PATTERNS:
-        matches = re.findall(pattern, text, re.IGNORECASE)
+    # Check for Hallucination Firewall violations (centralized patterns)
+    for compiled_re in BLOCKED_CLAIM_PATTERNS:
+        matches = compiled_re.findall(text)
         if matches:
             warnings.append(
                 f"FIREWALL BLOCK: Pattern '{matches[0]}' detected. "
                 f"Absolute claims must be softened or removed."
             )
 
-    # Check for statistical claims without sources
-    for pattern in REQUIRE_SOURCE_PATTERNS:
-        matches = re.finditer(pattern, text, re.IGNORECASE)
+    # Check for statistical claims without sources (centralized patterns)
+    for compiled_re in REQUIRE_SOURCE_PATTERNS:
+        matches = compiled_re.finditer(text)
         for match in matches:
             # Look for a source reference nearby (within 200 chars)
             start = max(0, match.start() - 200)
@@ -131,6 +119,23 @@ def validate_claim_block(text: str) -> list[str]:
         conf = int(conf_str)
         if conf < 0 or conf > 100:
             warnings.append(f"CONFIDENCE: Value {conf} out of range [0, 100]")
+
+    # H2: Cross-validate claim_type vs confidence (P1 deterministic)
+    # SPECULATIVE claims should not have high confidence; each type has a ceiling.
+    # Match claim_type and confidence within 4 lines (same YAML block, no DOTALL)
+    ct_conf_pairs = re.findall(
+        r'claim_type:\s*["\']?(\w+)["\']?[^\n]*\n(?:[^\n]*\n){0,3}[^\n]*confidence:\s*(\d+)',
+        text,
+    )
+    for ct, conf_str in ct_conf_pairs:
+        conf = int(conf_str)
+        max_conf = MIN_CONFIDENCE.get(ct)
+        if max_conf is not None and conf > max_conf:
+            warnings.append(
+                f"CONFIDENCE_CEILING: {ct} claim has confidence={conf}, "
+                f"max allowed for {ct}={max_conf}. "
+                f"Reduce confidence or change claim_type."
+            )
 
     return warnings
 

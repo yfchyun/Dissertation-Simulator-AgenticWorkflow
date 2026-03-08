@@ -183,7 +183,8 @@ AgenticWorkflow는 자식 워크플로우를 생성하는 부모 유기체다. `
 | 4계층 검증 | `Verification` + `pACS` 필드 |
 | P1 봉쇄 | Hook 기반 결정론적 검증 |
 | Safety Hook | PreToolUse 차단 패턴 |
-| Adversarial Review | `Review:` 필드 — `@reviewer` / `@fact-checker` |
+| Adversarial Review | `Review:` 필드 — `@reviewer` / `@fact-checker` / `@code-reviewer` |
+| Adversarial Dialogue | `Dialogue:` 필드 — Review FAIL 시 Generator-Critic 반복 루프 |
 | Decision Log | `autopilot-logs/` 패턴 |
 | Context Preservation | 세션 간 기억 보존 패턴 |
 
@@ -313,6 +314,9 @@ Orchestrator (품질 조율 및 전체 흐름 관리)
    - **모든 에이전트 실행 단계에 `Verification` 필수** — Research/Planning/Implementation 구분 없음 (Research 단계도 "완전성" 검증 필요: 예 "5개 경쟁사 모두 분석 완료")
    - `(human)` 단계만 예외 — 사람이 검증자이므로 `Verification` 필드 불필요
    - 각 기준은 **제3자가 참/거짓 판정 가능한 구체적 문장**으로 작성
+   - **EVP-1 (Atomic Verification Criteria)**: 각 기준은 **단일 행동**만 검증 — `and`, `+`, `및` 접속사로 복합 기준 작성 금지. 복합 기준은 분리하여 각각 독립 행으로 작성
+   - **EVP-2 (Sequential Inline Check)**: 에이전트가 각 하위 작업 완료 직후 해당 기준을 즉시 검증하도록 기준을 **실행 순서와 일치**하게 배치
+   - **EVP-3 (Dependency Annotation)**: 기준 간 의존 관계 명시 — `(requires: V1)` (선행 기준 의존), `(pipeline)` (다음 단계 입력 호환)
    - 5가지 기준 유형을 조합하여 포함:
      - **구조적 완전성**: 산출물 내부 구조 → "5개 섹션 모두 포함", "각 항목에 3개 이상 하위 항목"
      - **기능적 목표**: 작업 목표 달성 → "경쟁사 3곳 이상의 가격 데이터", "모든 API endpoint 구현"
@@ -320,12 +324,25 @@ Orchestrator (품질 조율 및 전체 흐름 관리)
      - **파이프라인 연결**: 다음 단계 입력 호환 → "Step N이 필요로 하는 필드 포함", "출력 형식이 Step N+1 입력과 일치"
      - **교차 단계 추적성**: 이전 단계 데이터 논리적 도출 → "분석 주장의 80% 이상이 [trace:step-N] 마커로 출처 추적 가능"
    - **Tip**: 기준 서술 시 `(source: Step N)` 어노테이션을 활용하면, Verification 기준 자체가 이전 단계를 명시적으로 참조하여 진단 시 상류 영향 분석을 자동화할 수 있다. 예: "경쟁사 분석 데이터가 Step 2 연구 결과를 반영 (source: Step 2)"
+   - **P1 자동 검증 (AGENTS.md §5.3 P1 Verification Enforcement)**:
+     - V1d: 각 기준의 Evidence가 ≥ 20자 — "ok", "checked" 등 피상적 증거 방지
+     - V1e: 복합 기준(`and`, `+`, `및` 접속사) 자동 탐지 → WARNING
+     - VE1-VE5: Agent PASS 선언을 실제 산출물 파일에 대해 Python으로 교차 검증 — 할루시네이션 원천 차단
+     - 실행: `python3 validate_verification.py --step N` (V1d/V1e) + `python3 validate_criteria_evidence.py --step N` (VE1-VE5)
 8. 각 단계에 **Review 필드** 설정 (AGENTS.md §5.5 — 선택적):
    - 연구/분석 산출물 (사실 검증 필요) → `@fact-checker`
    - 코드/기술 산출물 (로직/완전성 검증 필요) → `@reviewer`
    - 고위험 단계 (양쪽 모두) → `@reviewer + @fact-checker`
+   - 개발 도메인 코드 산출물 → `@code-reviewer`
    - 저위험 또는 중간 단계 → `none` (L1.5까지만)
    - **실행 순서**: Review PASS → Translation (Review FAIL 상태에서 번역 금지)
+8a. 각 단계에 **Dialogue 필드** 설정 (AGENTS.md §5.5 Adversarial Dialogue — 선택적):
+   - `Dialogue:` 필드는 `Review:` 필드와 함께 사용 — Review FAIL 시 반복 루프 활성화
+   - Research 도메인 (사실/분석 산출물): `Dialogue: research` — @fact-checker + @reviewer 병렬
+   - Development 도메인 (코드 산출물): `Dialogue: development` — @code-reviewer
+   - **사용 기준**: 고위험 단계 또는 할루시네이션 위험이 높은 단계 (중간 단계는 선택적)
+   - 예: `Dialogue: research, max_rounds: 3` / `Dialogue: development, max_rounds: 2`
+   - **절대 금지**: `Dialogue:` 진행 중 `--advance` 실행 금지; 단일 Critic 실행 금지 (Research 도메인)
 9. 각 단계에 **Translation 필드** 설정 — 텍스트 산출물(`.md`, `.txt`)은 `@translator`, 코드/데이터/설정은 `none`
 10. Claude Code 구현 설계 추가 (Sub-agents, Teams, Hooks, Commands, Skills, MCP)
    - **Context Injection 패턴 선택** (각 에이전트 단계별):

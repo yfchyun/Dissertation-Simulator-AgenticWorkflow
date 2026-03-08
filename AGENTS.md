@@ -27,7 +27,7 @@ AgenticWorkflow는 자식 agentic workflow system을 낳는 **부모 유기체**
 | 절대 기준 3개 | workflow.md `Inherited DNA` 섹션 — 도메인별 맥락화 |
 | SOT 패턴 | `state.yaml` — 단일 파일 + 단일 쓰기 지점 |
 | 3단계 구조 | Research → Planning → Implementation 구조 제약 |
-| 4계층 검증 | L0 Anti-Skip → L1 Verification → L1.5 pACS → L2 Review |
+| 5계층 검증 | L0 Anti-Skip → L1 Verification → L1.5 pACS → L1.7 pCCS → L2 Review |
 | P1 봉쇄 | Python 결정론적 검증 스크립트 |
 | Safety Hook | 위험 명령 차단 + TDD Guard |
 | Adversarial Review | `@reviewer` + `@fact-checker` Generator-Critic 패턴 |
@@ -236,12 +236,16 @@ Task(subagent_type="translator", prompt="...", ...)
 ```
 Team Lead(=Orchestrator)
   1. TeamCreate → SOT active_team 기록
-  2. TaskCreate (subject, description, owner=@teammate)
+  2. TaskCreate (subject, description, owner=@teammate, blocks, blockedBy)
+     → blocks/blockedBy: Design-time 의존성 선언 (workflow.md에서 미리 정의)
   3. Task(subagent_type, team_name, ...) → Teammate 생성
   4. Teammate: 작업 수행 → L1 자기 검증 → L1.5 pACS 자기 채점
-  5. Teammate: SendMessage(보고 + pACS 점수) → TaskUpdate(completed)
+  5. Teammate: TaskUpdate(completed) → SendMessage(보고 + pACS 점수)
   6. Team Lead: 보고 수신 → L2 종합 검증 → SOT 갱신
-  7. TeamDelete → SOT active_team → completed_teams 이동
+     → blockedBy가 해소된 Task의 owner에게 SendMessage로 시작 통보
+  7. Team Lead: TaskList로 주기적 진행 상황 모니터링
+     → blocked Task 식별 → 차단 원인 분석 → 완료 산출물 품질 검증
+  8. TeamDelete → SOT active_team → completed_teams 이동
 ```
 
 **Dense Checkpoint Pattern (DCP)**: 턴 수 > 10인 Task에 중간 체크포인트(CP-1/2/3) 삽입. 상세: `references/claude-code-patterns.md §DCP`
@@ -313,6 +317,10 @@ AgenticWorkflow/
 │   │   ├── extract_references.py    (인용 추출·정렬 — P1 결정론적 citation 수집·중복 제거)
 │   │   ├── format_grounded_claims.py (GroundedClaim YAML 포맷팅 — P1 결정론적 스키마 변환)
 │   │   ├── generate_thesis_outline.py (마크다운 기반 목차 추출 — P1 결정론적 헤딩 파싱)
+│   │   ├── scan_code_structure.py   (Predictive Debugging Phase A — F1-F7 코드 구조 스캔, fp-code-map.json 생성, P1 결정론적)
+│   │   ├── extract_json_block.py    (Predictive Debugging Phase B→C — LLM 응답 JSON 결정론적 추출, --fallback-critic, P1 결정론적)
+│   │   ├── validate_failure_predictions.py (Predictive Debugging Phase C — FP1-FP7 예측 검증, MIN_VALID_PREDICTIONS=3, P1 결정론적)
+│   │   ├── generate_failure_report.py (Predictive Debugging Phase D — 보고서·SOT 생성, H-3 파일 존재 검증, P1 결정론적)
 │   │   ├── _test_secret_filter.py   (output_secret_filter 테스트 — 44개)
 │   │   ├── _test_sensitive_file_guard.py (security_sensitive_file_guard 테스트 — 44개)
 │   │   ├── _test_block_destructive.py (block_destructive_commands 테스트 — 43개)
@@ -766,6 +774,104 @@ Team Lead: Teammate 산출물 + pACS 점수 수신
 
 새로운 워크플로우 생성 시에는 `Verification` 필드를 필수로 포함한다. 기존 워크플로우는 점진적으로 추가 가능하다.
 
+#### Enhanced Verification Protocol (EVP)
+
+Verification Gate의 정확성과 완전성을 강화하는 3가지 원칙. 기존 Verification Protocol의 확장이며, 새 워크플로우 생성 시 필수 적용.
+
+##### EVP-1: Atomic Verification Criteria (AVC)
+
+각 Verification 기준은 **단일 행동(single action)**을 검증해야 한다. 복합 기준은 분리한다.
+
+| Good (Atomic) | Bad (Compound) |
+|---------------|----------------|
+| "5개 섹션 포함" | "5개 섹션 포함 **and** 모든 URL 유효" |
+| "모든 URL이 placeholder 없음" | "데이터 수집 **및** 분석 완료" |
+| "competitor_name 필드 포함" | "필드 포함 **+** 정렬 완료" |
+
+P1 자동 탐지: `validate_verification.py`의 V1e가 복합 기준을 WARNING으로 표면화.
+
+##### EVP-2: Sequential Inline Check (SIC)
+
+에이전트는 각 기준을 **해당 하위 작업 완료 직후** 검증한다. 모든 작업 완료 후 일괄 검증하지 않는다.
+
+```
+Step N 실행 흐름:
+  검증 기준 읽기 (전체)
+  ├─ Sub-task A 실행 → 기준 1 즉시 검증 → PASS/FAIL 기록
+  ├─ Sub-task B 실행 → 기준 2 즉시 검증 → PASS/FAIL 기록
+  ├─ Sub-task C 실행 → 기준 3 즉시 검증 → PASS/FAIL 기록
+  └─ 전체 종합 → verification-logs/step-N-verify.md 생성
+```
+
+**이점**: 실패 시 해당 하위 작업만 재실행하므로 효율적. 일괄 검증 시 "어디서 실패했는지" 역추적하는 비용 제거.
+
+##### EVP-3: Dependency Annotation (프로토콜 수준 — P1 미강제)
+
+검증 기준 간 의존 관계를 명시한다. 의존 기준이 FAIL이면 후속 기준은 검증을 건너뛴다. 이 어노테이션은 에이전트 행동 지침이며, P1 코드로 강제하지 않는다.
+
+```markdown
+- **Verification**:
+  - [ ] V1: 데이터 파일 3개 이상 존재
+  - [ ] V2: 각 파일에 10행 이상 데이터 (requires: V1)
+  - [ ] V3: 분석 결과가 V2 데이터에서 도출 (requires: V2)
+  - [ ] V4: Step 3 입력 형식과 호환 (pipeline)
+```
+
+- `(requires: V1)`: V1이 PASS일 때만 검증
+- `(pipeline)`: 다음 단계 입력 호환성 검증 (파이프라인 연결)
+
+#### P1 Verification Enforcement
+
+에이전트의 자기 검증(Self-Verification)을 **결정론적 Python 코드**로 교차 검증하는 P1 계층. 에이전트 할루시네이션을 원천 차단한다.
+
+##### V1d: Evidence Quality Check
+
+검증 로그의 각 기준별 Evidence가 **≥ 20자**인지 확인. "ok", "checked" 등 피상적 증거를 방지.
+
+- 스크립트: `_context_lib.py → validate_verification_log()`
+- 위반 시: `V1d FAIL` — 검증 로그 무효화
+- 교정: 구체적 데이터(파일 경로, 건수, 측정값) 포함
+
+##### V1e: Compound Criterion Detection
+
+검증 기준에 `and`, `+`, `및`, `그리고`, `&` 접속사가 포함되면 복합 기준으로 탐지.
+
+- 스크립트: `_context_lib.py → validate_verification_log()`
+- 위반 시: `V1e WARNING` — 경고만 (무효화하지 않음)
+- 교정: EVP-1에 따라 원자적 기준으로 분리
+
+##### VE1-VE5: Criteria-Evidence Cross-Check (할루시네이션 탐지)
+
+에이전트가 "PASS"라고 선언한 기준을 **실제 산출물 파일에 대해 Python으로 재검증**. 에이전트의 PASS 선언과 P1 검증 결과가 불일치하면 `HALLUCINATION_DETECTED`.
+
+| ID | 검증 대상 | 메커니즘 |
+|----|---------|---------|
+| VE1 | Section/heading count | `re.findall(r"^#{1,6}\s+.+$")` — 기준에 명시된 숫자와 실제 heading 수 비교 |
+| VE2 | Placeholder absence | `example.com`, `TODO`, `TBD`, `FIXME`, `Lorem ipsum` 등 플레이스홀더 탐지 |
+| VE3 | Item/row/element count | 리스트 항목(`^[-*+]`) + 테이블 행(`^\|`) 카운트 |
+| VE4 | `[trace:step-N]` markers | 추적성 마커 수량 검증 |
+| VE5 | Field/keyword presence | 기준에 명시된 필드(name, price 등)가 산출물에 존재하는지 검증 |
+
+- 스크립트: `validate_criteria_evidence.py` (CLI 도구, Orchestrator 호출)
+- 사용: `python3 validate_criteria_evidence.py --step N --project-dir .`
+- SOT: **Read-only** — 산출물 경로 자동 탐지를 위해 SOT를 읽기만 함
+- Exit: 항상 0 (non-blocking) — JSON stdout으로 결과 보고
+
+```
+Agent: "5 sections present → PASS"
+VE1:   실제 heading 2개 발견
+Result: HALLUCINATION_DETECTED → 재실행 필요
+```
+
+##### L1.3: Micro-Verify (선택적)
+
+기계적으로 검증 불가능한 기준(예: "분석 깊이 충분")에 대해 `@micro-verifier` (haiku 모델)가 독립 스팟체크.
+
+- 트리거: VE1-VE5 중 어느 패턴에도 매칭되지 않는 기준
+- 실행: Orchestrator 판단으로 선택적 호출
+- 비용: 경량 모델 사용으로 토큰 비용 최소화
+- 결과: advisory only — FAIL이어도 자동 차단하지 않음
+
 #### SOT 영향
 
 **없음.** Verification Protocol은 에이전트 실행 프로토콜(프롬프트 계층)이며, SOT 구조를 변경하지 않는다. `current_step` 진행이 이미 검증 완료를 암묵적으로 의미하며, 검증 상세는 `verification-logs/` 파일에 기록한다.
@@ -826,6 +932,12 @@ L1.5  pACS Self-Rating (Agent — 신뢰도)
         Pre-mortem → F, C, L 채점 → min(F,C,L) = pACS
         ↓ GREEN/YELLOW: 진행 (YELLOW은 플래그)
         ↓ RED: 재작업 또는 에스컬레이션
+L1.7  pCCS per-claim confidence (Tier A steps only — GroundedClaim)
+        P1 Sandwich: compute_pccs_signals.py → [@claim-quality-evaluator] →
+        validate_pccs_assessment.py → [@claim-quality-critic] →
+        generate_pccs_report.py → validate_pccs_output.py
+        ↓ proceed: 진행 / rewrite_claims: RED claim만 재작성 / rewrite_step: 전체 재실행
+        상세: docs/protocols/quality-gates.md §(19)
 L2    Adversarial Review (Enhanced — Review: 필드 지정 단계)
         @reviewer/@fact-checker가 산출물을 독립적으로 적대적 검토 (§5.5)
 ```
@@ -911,6 +1023,20 @@ Translation pACS = min(Ft, Ct, Nt). 행동 트리거는 동일 (GREEN/YELLOW/RED
 
 > **설계 결정**: pACS를 Verification 없이 단독 사용하는 것은 금지한다. 완전성 검증(L1) 없이 신뢰도 평가(L1.5)만 하면, "다 빠뜨렸지만 확신은 높다"는 모순적 상태가 가능해진다.
 
+### 5.4b pCCS — predicted Claim Confidence Score (per-claim 신뢰도)
+
+AlphaFold pLDDT에서 영감. pACS가 **단계 전체의 자기 신뢰도**를 수치화하는 반면, pCCS는 **개별 claim의 신뢰도**를 정량화한다. GroundedClaim이 있는 Tier A 단계(88개)에서만 실행.
+
+P1 Sandwich 아키텍처로 할루시네이션 봉쇄: Phase A(P1) → B-1(LLM) → C-1(P1) → B-2(LLM) → C-2(P1) → D(P1 합성). Claim-type adaptive weights (FACTUAL 0.50/0.50 → SPECULATIVE 0.15/0.85). Calibration delta로 체계적 과신 보정.
+
+Decision matrix: 0 RED → proceed, 1-2 RED → rewrite_claims, 3+ RED → rewrite_step. SPECULATIVE는 pCCS<40만 RED (pCCS<50이 아님).
+
+SOT: `session.json.pccs` 블록 (cal_delta, last_step, history). RLM: `restore_context.py._surface_pccs_state()` IMMORTAL 섹션.
+
+서브에이전트: `@claim-quality-evaluator` (Phase B-1, sonnet), `@claim-quality-critic` (Phase B-2, sonnet, adversarial).
+
+**상세**: `docs/protocols/quality-gates.md §(19)`.
+
 ### 5.5 Adversarial Review (Enhanced L2 — 적대적 검토)
 
 기존 L2 Calibration을 대체하는 강화된 품질 검증 계층. Generator-Critic 패턴으로 산출물을 독립적으로 검토한다.
@@ -921,6 +1047,7 @@ Translation pACS = min(Ft, Ct, Nt). 행동 트리거는 동일 (GREEN/YELLOW/RED
 L0   Anti-Skip Guard (Hook — deterministic)
 L1   Verification Gate (Agent self-check)
 L1.5 pACS Self-Rating (Agent confidence)
+L1.7 pCCS per-claim confidence (Tier A — §5.4b)
 L2   Adversarial Review (Enhanced L2) ← 이 섹션
        ├── Content critical analysis (LLM — @reviewer / @fact-checker)
        ├── Independent pACS scoring (LLM → Python validates)
@@ -1097,6 +1224,56 @@ Task → L0 → L1 → L1.5 → Review(L2) → PASS → Translation → SOT upda
 | `@reviewer`/`@fact-checker` 에이전트 미정의 | Sub-agent 호출 실패 시 사용자 에스컬레이션 |
 
 > **설계 결정**: Adversarial Review를 기존 L2 Calibration의 Enhanced 버전으로 위치시킨다. L2 Calibration의 "교차 검증"을 "적대적 검토"로 강화하되, 기존 L0/L1/L1.5 계층은 전혀 변경하지 않는다. `Review:` 필드가 없는 단계는 이전과 동일하게 동작한다.
+
+#### Adversarial Dialogue (L2 반복 루프 — Round 2+)
+
+단일 리뷰(L2)가 FAIL을 반환할 때 Orchestrator는 **Adversarial Dialogue**를 시작한다. Generator와 Critic이 최대 N라운드 반복하며 자기 교정한다.
+
+**아키텍처 위치**: L2 Adversarial Review의 반복 확장. L0/L1/L1.5는 변경 없음.
+
+```
+Round 1: Generator draft → Parallel Critics (fc + rv) → FAIL → Round 2
+Round 2: Generator revises → Parallel Critics (incremental) → FAIL → Round 3
+...
+Round K: PASS → consensus → review-logs/step-N-review.md → --advance
+         OR max rounds exceeded → escalated → user escalation
+```
+
+**Tier**: Tier 2 (Sub-agent respawning with accumulated feedback) — Agent Teams 불필요.
+
+**도메인별 차이**:
+
+| 도메인 | Critics | 파일 패턴 | CI1-CI4 |
+|--------|---------|-----------|---------|
+| Research | @fact-checker (Primary) + @reviewer (Secondary) — 동시 실행 | `step-N-r{K}-fc.md`, `step-N-r{K}-rv.md`, `step-N-draft-r{K}.md` | 적용 |
+| Development | @code-reviewer | `step-N-r{K}-cr.md` (in-place edits) | 스킵 |
+
+**SOT 관리 — checklist_manager.py dialogue 명령**:
+
+```bash
+# 1. 시작
+python3 .claude/hooks/scripts/checklist_manager.py --dialogue-start \
+  --project-dir {dir} --step {N} --domain research --max-rounds 3
+
+# 2. 라운드 종료 후
+python3 .claude/hooks/scripts/checklist_manager.py --dialogue-round \
+  --project-dir {dir} --step {N} --round {K} --verdict FAIL
+
+# 3. 대화 종료
+python3 .claude/hooks/scripts/checklist_manager.py --dialogue-end \
+  --project-dir {dir} --step {N} --outcome consensus
+```
+
+**P1 할루시네이션 봉쇄 (Dialogue 전용)**:
+
+| 검증 | 스크립트 | 검사 항목 |
+|------|---------|---------|
+| Dialogue State | `validate_dialogue_state.py` | DA1-DA5: 파일 존재·타임스탬프·판정 일관성·SOT 정합 |
+| Claim Inheritance | `validate_claim_inheritance.py` | CI1-CI4: 상속 claim 존재·판정 상속성·claim 수·변경 단락 |
+| Retry Budget | `validate_retry_budget.py --gate dialogue` | RB1-RB3: 재시도 예산 (기본 10, ULW 15) |
+| File Coverage | `validate_review.py --check-file-coverage` | CR6: @code-reviewer가 지정 파일 전부 검토했는지 |
+
+**상세**: `docs/protocols/adversarial-dialogue.md`
 
 ---
 

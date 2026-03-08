@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for guard_sot_write.py — thesis SOT write protection.
+"""Tests for guard_sot_write.py — SOT write protection (thesis + system).
 
 Run: python3 -m pytest _test_guard_sot_write.py -v
 """
@@ -16,48 +16,90 @@ sys.path.insert(0, str(Path(__file__).parent))
 import guard_sot_write as guard
 
 
-class TestIsThesisSOTPath(unittest.TestCase):
-    """Test is_thesis_sot_path() path matching."""
+class TestIsSOTPath(unittest.TestCase):
+    """Test is_sot_path() path matching for both thesis and system SOT."""
 
-    def test_matches_standard_path(self):
-        self.assertTrue(guard.is_thesis_sot_path(
+    # --- Thesis SOT ---
+
+    def test_thesis_sot_standard_path(self):
+        self.assertTrue(guard.is_sot_path(
             "/project/thesis-output/my-thesis/session.json",
             "/project",
         ))
 
-    def test_matches_nested_path(self):
-        self.assertTrue(guard.is_thesis_sot_path(
+    def test_thesis_sot_nested_path(self):
+        self.assertTrue(guard.is_sot_path(
             "/project/thesis-output/deep/nested/session.json",
             "/project",
         ))
 
     def test_rejects_root_session_json(self):
         """session.json at project root is NOT thesis SOT."""
-        self.assertFalse(guard.is_thesis_sot_path(
+        self.assertFalse(guard.is_sot_path(
             "/project/session.json",
             "/project",
         ))
 
     def test_rejects_different_filename(self):
-        self.assertFalse(guard.is_thesis_sot_path(
+        self.assertFalse(guard.is_sot_path(
             "/project/thesis-output/my-thesis/config.json",
             "/project",
         ))
 
-    def test_rejects_non_thesis_output(self):
-        self.assertFalse(guard.is_thesis_sot_path(
+    def test_rejects_non_thesis_output_dir(self):
+        self.assertFalse(guard.is_sot_path(
             "/project/other-dir/my-thesis/session.json",
             "/project",
         ))
 
-    def test_rejects_short_path(self):
-        self.assertFalse(guard.is_thesis_sot_path(
-            "/project/session.json",
+    # --- System SOT ---
+
+    def test_system_sot_project_root(self):
+        """state.yaml at project root IS system SOT."""
+        self.assertTrue(guard.is_sot_path(
+            "/project/state.yaml",
             "/project",
         ))
 
+    def test_system_sot_one_level_deep(self):
+        """state.yaml one level deep IS system SOT (workflow subdir)."""
+        self.assertTrue(guard.is_sot_path(
+            "/project/my-workflow/state.yaml",
+            "/project",
+        ))
+
+    def test_rejects_deep_nested_state_yaml(self):
+        """state.yaml deeply nested is NOT system SOT (false positive prevention)."""
+        self.assertFalse(guard.is_sot_path(
+            "/project/config/nested/state.yaml",
+            "/project",
+        ))
+
+    def test_rejects_dotdir_state_yaml(self):
+        """state.yaml in hidden dirs (e.g. .claude/) is NOT system SOT."""
+        self.assertFalse(guard.is_sot_path(
+            "/project/.claude/state.yaml",
+            "/project",
+        ))
+
+    def test_rejects_skills_state_yaml(self):
+        """state.yaml deep in .claude/skills is NOT system SOT."""
+        self.assertFalse(guard.is_sot_path(
+            "/project/.claude/skills/workflow-generator/references/state.yaml",
+            "/project",
+        ))
+
+    # --- Edge cases ---
+
     def test_handles_empty_strings(self):
-        self.assertFalse(guard.is_thesis_sot_path("", ""))
+        self.assertFalse(guard.is_sot_path("", ""))
+
+    def test_handles_different_projects(self):
+        """Path outside project dir is NOT SOT."""
+        self.assertFalse(guard.is_sot_path(
+            "/other-project/state.yaml",
+            "/project",
+        ))
 
 
 class TestIsOrchestratorContext(unittest.TestCase):
@@ -125,7 +167,9 @@ class TestMainFunction(unittest.TestCase):
         with patch.dict(os.environ, env, clear=False):
             self.assertEqual(guard.main(), 0)
 
-    def test_allows_orchestrator_sot_write(self):
+    # --- Thesis SOT ---
+
+    def test_allows_orchestrator_thesis_sot_write(self):
         env = self._make_env(
             file_path="/project/thesis-output/my-thesis/session.json",
             is_orchestrator=True,
@@ -133,8 +177,8 @@ class TestMainFunction(unittest.TestCase):
         with patch.dict(os.environ, env, clear=False):
             self.assertEqual(guard.main(), 0)
 
-    def test_allows_main_session_sot_write(self):
-        """Main session (not teammate) can write SOT."""
+    def test_allows_main_session_thesis_sot_write(self):
+        """Main session (not teammate) can write thesis SOT."""
         env = self._make_env(
             file_path="/project/thesis-output/my-thesis/session.json",
             is_teammate=False,
@@ -142,7 +186,7 @@ class TestMainFunction(unittest.TestCase):
         with patch.dict(os.environ, env, clear=False):
             self.assertEqual(guard.main(), 0)
 
-    def test_blocks_teammate_sot_write(self):
+    def test_blocks_teammate_thesis_sot_write(self):
         env = self._make_env(
             file_path="/project/thesis-output/my-thesis/session.json",
             is_teammate=True,
@@ -150,7 +194,7 @@ class TestMainFunction(unittest.TestCase):
         with patch.dict(os.environ, env, clear=False):
             self.assertEqual(guard.main(), 2)
 
-    def test_blocks_edit_tool_too(self):
+    def test_blocks_edit_thesis_sot(self):
         env = self._make_env(
             tool_name="Edit",
             file_path="/project/thesis-output/my-thesis/session.json",
@@ -158,6 +202,50 @@ class TestMainFunction(unittest.TestCase):
         )
         with patch.dict(os.environ, env, clear=False):
             self.assertEqual(guard.main(), 2)
+
+    # --- System SOT ---
+
+    def test_allows_orchestrator_system_sot_write(self):
+        env = self._make_env(
+            file_path="/project/state.yaml",
+            is_orchestrator=True,
+        )
+        with patch.dict(os.environ, env, clear=False):
+            self.assertEqual(guard.main(), 0)
+
+    def test_allows_main_session_system_sot_write(self):
+        """Main session (not teammate) can write system SOT."""
+        env = self._make_env(
+            file_path="/project/state.yaml",
+            is_teammate=False,
+        )
+        with patch.dict(os.environ, env, clear=False):
+            self.assertEqual(guard.main(), 0)
+
+    def test_blocks_teammate_system_sot_write(self):
+        env = self._make_env(
+            file_path="/project/state.yaml",
+            is_teammate=True,
+        )
+        with patch.dict(os.environ, env, clear=False):
+            self.assertEqual(guard.main(), 2)
+
+    def test_blocks_teammate_system_sot_one_level(self):
+        env = self._make_env(
+            file_path="/project/my-workflow/state.yaml",
+            is_teammate=True,
+        )
+        with patch.dict(os.environ, env, clear=False):
+            self.assertEqual(guard.main(), 2)
+
+    def test_allows_teammate_deep_state_yaml(self):
+        """state.yaml deep in subdirs is NOT SOT — teammate can write."""
+        env = self._make_env(
+            file_path="/project/config/nested/state.yaml",
+            is_teammate=True,
+        )
+        with patch.dict(os.environ, env, clear=False):
+            self.assertEqual(guard.main(), 0)
 
     def test_allows_teammate_non_sot_write(self):
         """Teammates CAN write their own output files."""
@@ -167,6 +255,8 @@ class TestMainFunction(unittest.TestCase):
         )
         with patch.dict(os.environ, env, clear=False):
             self.assertEqual(guard.main(), 0)
+
+    # --- Error handling ---
 
     def test_handles_invalid_json_input(self):
         env = {
@@ -200,17 +290,6 @@ class TestMainFunction(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=False):
             self.assertEqual(guard.main(), 0)
-
-
-class TestNoSystemSOTReference(unittest.TestCase):
-    """Verify this script does NOT reference system SOT filenames (R6)."""
-
-    def test_no_system_sot_reference(self):
-        script_path = Path(__file__).parent / "guard_sot_write.py"
-        content = script_path.read_text()
-        for forbidden in ["state.yaml", "state.yml"]:
-            self.assertNotIn(forbidden, content.lower(),
-                             f"Script must not reference '{forbidden}'")
 
 
 if __name__ == "__main__":

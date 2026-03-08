@@ -19,7 +19,12 @@ import re
 import sys
 from pathlib import Path
 
-from _claim_patterns import count_claims as _count_claims  # noqa: E402
+from _claim_patterns import (  # noqa: E402
+    CITATION_DOI_RE,
+    CITATION_INLINE_RE,
+    CITATION_PAREN_RE,
+    count_claims as _count_claims,
+)
 
 # Scoring parameters
 MAX_CS_SCORE = 100
@@ -38,25 +43,17 @@ def compute_citation_score(content: str, claim_count: int) -> int:
     if claim_count == 0:
         return 0
 
-    # Count citations (Author, Year) or (Author Year) patterns
-    citations = re.findall(
-        r'\((?:[A-Z][a-z]+(?:\s+(?:et\s+al\.?|&\s+[A-Z][a-z]+))?'
-        r',?\s*\d{4}[a-z]?)\)',
-        content,
-    )
-    # Also count "Author (Year)" format
-    citations2 = re.findall(
-        r'[A-Z][a-z]+\s+(?:et\s+al\.?\s+)?\(\d{4}[a-z]?\)',
-        content,
-    )
+    # Count citations using centralized patterns from _claim_patterns
+    citations = CITATION_PAREN_RE.findall(content)
+    citations2 = CITATION_INLINE_RE.findall(content)
     total_citations = len(citations) + len(citations2)
 
     # Citations per claim ratio (target: 2+ per claim = full score)
     ratio = min(total_citations / max(claim_count, 1), 2.0)
     ratio_score = ratio / 2.0 * 40  # 40 points max
 
-    # DOI presence
-    dois = re.findall(r'doi:\s*["\']?10\.\d{4,}/', content, re.IGNORECASE)
+    # DOI presence (centralized pattern from _claim_patterns)
+    dois = CITATION_DOI_RE.findall(content)
     doi_count = len(dois)
     doi_score = min(doi_count / max(claim_count, 1), 1.0) * 30  # 30 points max
 
@@ -80,8 +77,8 @@ def compute_verifiability_score(content: str, claim_count: int) -> int:
     if claim_count == 0:
         return 0
 
-    # DOI count
-    dois = len(re.findall(r'doi:\s*["\']?10\.\d{4,}/', content, re.IGNORECASE))
+    # DOI count (centralized pattern from _claim_patterns)
+    dois = len(CITATION_DOI_RE.findall(content))
     doi_ratio = min(dois / max(claim_count, 1), 1.0)
     doi_score = doi_ratio * 40  # 40 points
 

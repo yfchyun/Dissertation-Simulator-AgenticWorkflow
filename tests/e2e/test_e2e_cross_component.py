@@ -94,13 +94,13 @@ class TestContextSummaryIntegration:
     """E2E: generate_context_summary reads thesis SOT correctly."""
 
     def test_thesis_summary_function(self, thesis_project):
-        """Call _get_thesis_state_summary directly."""
+        """Call get_thesis_state_summary directly."""
         proj, _ = thesis_project
         sys.path.insert(0, str(SCRIPTS_DIR))
-        from generate_context_summary import _get_thesis_state_summary
+        from _context_lib import get_thesis_state_summary
         # Need to pass the PARENT of thesis-output
         aw_root = proj.parent.parent  # tmp_path (contains thesis-output/)
-        summary = _get_thesis_state_summary(str(aw_root))
+        summary = get_thesis_state_summary(str(aw_root))
         assert "test-project" in summary
         assert "step 0/" in summary
         assert "status=running" in summary
@@ -109,22 +109,22 @@ class TestContextSummaryIntegration:
         import checklist_manager as cm
         proj, _ = thesis_project
         cm.record_gate_result(proj, "gate-1", "pass")
-        from generate_context_summary import _get_thesis_state_summary
+        from _context_lib import get_thesis_state_summary
         aw_root = proj.parent.parent
-        summary = _get_thesis_state_summary(str(aw_root))
+        summary = get_thesis_state_summary(str(aw_root))
         assert "gate-1:pass" in summary
 
     def test_thesis_summary_shows_hitl(self, thesis_project):
         proj, _ = thesis_project
         run_cm("--record-hitl", "hitl-0", "--project-dir", str(proj))
-        from generate_context_summary import _get_thesis_state_summary
+        from _context_lib import get_thesis_state_summary
         aw_root = proj.parent.parent
-        summary = _get_thesis_state_summary(str(aw_root))
+        summary = get_thesis_state_summary(str(aw_root))
         assert "hitl-0" in summary
 
     def test_thesis_summary_empty_if_no_projects(self, tmp_path):
-        from generate_context_summary import _get_thesis_state_summary
-        summary = _get_thesis_state_summary(str(tmp_path))
+        from _context_lib import get_thesis_state_summary
+        summary = get_thesis_state_summary(str(tmp_path))
         assert summary == ""
 
 
