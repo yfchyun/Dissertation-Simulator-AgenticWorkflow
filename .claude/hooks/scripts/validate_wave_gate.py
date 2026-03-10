@@ -12,10 +12,15 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
 from _claim_patterns import count_claims, extract_claim_ids  # noqa: E402
+
+# H-4 aligned: Same strict regex as validate_thesis_output.py for consolidated files.
+# Prevents false matches on arbitrary filenames.
+_CONSOLIDATED_RE = re.compile(r'^step-(\d{3})-to-(\d{3})-([a-z][-a-z]*[a-z])\.md$')
 
 # Gate definitions: which wave outputs to validate
 GATE_CONFIG = {
@@ -113,10 +118,26 @@ def validate_gate(project_dir: str, gate_name: str) -> dict:
             "errors": [f"Wave directory not found: {wave_dir}"],
         }
 
-    # Check each output file
-    md_files = sorted(wave_dir.glob("*.md"))
-    # Exclude .ko.md translation files
-    md_files = [f for f in md_files if not f.name.endswith(".ko.md")]
+    # Check each output file — detect consolidated vs individual mode.
+    # Consolidated filenames: step-NNN-to-NNN-agent.md (from query_step.py).
+    # If consolidated files exist, use ONLY those to prevent double-counting
+    # claims that appear in both consolidated and residual individual files
+    # (e.g., after Consolidation Fallback Protocol splits a failed group).
+    all_md = sorted(wave_dir.glob("*.md"))
+    all_md = [f for f in all_md if not f.name.endswith(".ko.md")]
+
+    consolidated = [f for f in all_md if _CONSOLIDATED_RE.match(f.name)]
+    if consolidated and len(consolidated) >= config["min_files"]:
+        md_files = consolidated
+        # Warn if mixed state detected (both consolidated + non-consolidated)
+        non_consolidated = [f for f in all_md if not _CONSOLIDATED_RE.match(f.name)]
+        if non_consolidated:
+            warnings.append(
+                f"Mixed state: {len(consolidated)} consolidated + "
+                f"{len(non_consolidated)} individual files — using consolidated only"
+            )
+    else:
+        md_files = all_md
 
     if len(md_files) < config["min_files"]:
         errors.append(

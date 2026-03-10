@@ -1471,6 +1471,8 @@ AGENTS.md의 절대 기준이 변경되면, 모든 Spoke 파일의 인라인 복
 | Gate (5개) | Wave 간 교차 검증. Claim 품질 임계값 미달 시 진행 차단 | L1 Verification Gate |
 | HITL (9개) | 인간 승인 필수 지점. 연구 방향·방법론·최종 산출물 | L2 Adversarial Review |
 | 3-tier Fallback | Team → Sub-agent → Direct 실행 | P2 전문성 기반 위임 |
+| Step Consolidation | 동일 에이전트 연속 Step을 단일 호출로 통합 (210 step → 17 Orchestrator invocations). `query_step.py`의 3개 P1 함수로 결정론적 제어 | P1 데이터 정제 |
+| Consolidation Fallback | 통합 그룹 3회 실패 → 개별 Step 분리 재시도 | Bounded Retry Escalation |
 | Checkpoint | SOT + 체크리스트 스냅샷 저장·복원 | Context Preservation |
 
 ### 10.4 핵심 인프라
@@ -1485,8 +1487,9 @@ AGENTS.md의 절대 기준이 변경되면, 모든 Spoke 파일의 인라인 복
 | `compute_srcs_scores.py` | SRCS 4축 결정론적 점수 계산 |
 | `validate_wave_gate.py` | Wave/Gate 교차 검증 실행·기록 |
 | `validate_step_sequence.py` | 스텝 순서·의존성 검증 |
-| `validate_thesis_output.py` | 산출물 파일 존재·크기 검증 |
+| `validate_thesis_output.py` | 산출물 파일 존재·크기·TO5 heading·TO6 prefix 검증 (consolidated mode 지원) |
 | `validate_srcs_threshold.py` | SRCS 75점 임계값 검증 |
+| `query_step.py` | Step Execution Registry — H-1~H-4 결정론적 step→agent/tier/critic/pCCS 매핑, 통합 prompt 생성, 다음 실행 Step 계산 |
 | `validate_task_completion.py` | 태스크 완료 검증 (CLI-only, Orchestrator 호출) |
 | `teammate_health_check.py` | 에이전트 팀 건강 점검 |
 | `verify_translation_terms.py` | T10-T12 번역 콘텐츠 보존 검증 (P1) |

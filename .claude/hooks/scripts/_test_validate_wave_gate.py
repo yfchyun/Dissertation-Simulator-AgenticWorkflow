@@ -188,5 +188,157 @@ class TestNoSystemSOTReference(unittest.TestCase):
             self.assertNotIn("state.yml", line, f"Line {i}")
 
 
+class TestConsolidatedMode(unittest.TestCase):
+    """Test gate validation with consolidated output files."""
+
+    def _make_content(self, claim_ids: list[str]) -> str:
+        """Create valid content with the given claim IDs."""
+        claims = "\n".join(f"id: {cid}" for cid in claim_ids)
+        return f"# Output\n{'content ' * 50}\n{claims}\n"
+
+    def test_consolidated_files_pass(self):
+        """Gate passes with consolidated files meeting all thresholds."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wave_dir = Path(tmpdir) / "wave-results" / "wave-1"
+            wave_dir.mkdir(parents=True)
+            files = [
+                ("step-039-to-042-literature-searcher.md", ["LS-001", "LS-002", "LS-003"]),
+                ("step-043-to-046-seminal-works-analyst.md", ["SWA-001", "SWA-002", "SWA-003"]),
+                ("step-047-to-050-trend-analyst.md", ["TRA-001", "TRA-002", "TRA-003"]),
+                ("step-051-to-054-methodology-scanner.md", ["MS-001", "MS-002", "MS-003"]),
+            ]
+            for fname, cids in files:
+                (wave_dir / fname).write_text(self._make_content(cids))
+            result = validate_gate(tmpdir, "gate-1")
+            self.assertEqual(result["status"], "pass")
+            self.assertEqual(result["files_checked"], 4)
+
+    def test_consolidated_files_counted_correctly(self):
+        """Total claims counted from consolidated files only."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wave_dir = Path(tmpdir) / "wave-results" / "wave-1"
+            wave_dir.mkdir(parents=True)
+            for i, name in enumerate([
+                "step-039-to-042-literature-searcher.md",
+                "step-043-to-046-seminal-works-analyst.md",
+                "step-047-to-050-trend-analyst.md",
+                "step-051-to-054-methodology-scanner.md",
+            ]):
+                cids = [f"X-{i:02d}{j}" for j in range(5)]
+                (wave_dir / name).write_text(self._make_content(cids))
+            result = validate_gate(tmpdir, "gate-1")
+            self.assertEqual(result["total_claims"], 20)
+
+    def test_mixed_state_uses_consolidated_only(self):
+        """Mixed state (consolidated + individual): uses consolidated, warns."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wave_dir = Path(tmpdir) / "wave-results" / "wave-1"
+            wave_dir.mkdir(parents=True)
+            # 4 consolidated files
+            for name in [
+                "step-039-to-042-literature-searcher.md",
+                "step-043-to-046-seminal-works-analyst.md",
+                "step-047-to-050-trend-analyst.md",
+                "step-051-to-054-methodology-scanner.md",
+            ]:
+                (wave_dir / name).write_text(self._make_content(["LS-001", "LS-002", "LS-003"]))
+            # 1 stale individual file
+            (wave_dir / "01-literature-search-strategy.md").write_text(
+                self._make_content(["LS-001", "LS-002", "LS-003"])
+            )
+            result = validate_gate(tmpdir, "gate-1")
+            self.assertEqual(result["status"], "pass")
+            self.assertEqual(result["files_checked"], 4)  # consolidated only
+            self.assertTrue(any("Mixed state" in w for w in result["warnings"]))
+
+    def test_mixed_state_no_duplicate_claims(self):
+        """Mixed state: individual files excluded, so no duplicate claim IDs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wave_dir = Path(tmpdir) / "wave-results" / "wave-1"
+            wave_dir.mkdir(parents=True)
+            # Consolidated with unique claims
+            for i, name in enumerate([
+                "step-039-to-042-literature-searcher.md",
+                "step-043-to-046-seminal-works-analyst.md",
+                "step-047-to-050-trend-analyst.md",
+                "step-051-to-054-methodology-scanner.md",
+            ]):
+                (wave_dir / name).write_text(self._make_content([f"X-{i}01", f"X-{i}02", f"X-{i}03"]))
+            # Individual with SAME claim IDs (would cause duplicates if included)
+            (wave_dir / "stale.md").write_text(self._make_content(["X-001", "X-002", "X-003"]))
+            result = validate_gate(tmpdir, "gate-1")
+            dup_warnings = [w for w in result["warnings"] if "Duplicate" in w]
+            self.assertEqual(len(dup_warnings), 0)
+
+    def test_consolidated_ko_files_excluded(self):
+        """Korean translations of consolidated files are excluded."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wave_dir = Path(tmpdir) / "wave-results" / "wave-1"
+            wave_dir.mkdir(parents=True)
+            for name in [
+                "step-039-to-042-literature-searcher.md",
+                "step-043-to-046-seminal-works-analyst.md",
+                "step-047-to-050-trend-analyst.md",
+                "step-051-to-054-methodology-scanner.md",
+            ]:
+                (wave_dir / name).write_text(self._make_content(["LS-001", "LS-002", "LS-003"]))
+                ko_name = name.replace(".md", ".ko.md")
+                (wave_dir / ko_name).write_text("# Korean")
+            result = validate_gate(tmpdir, "gate-1")
+            self.assertEqual(result["files_checked"], 4)
+
+    def test_insufficient_consolidated_falls_back_to_all(self):
+        """If fewer consolidated files than min_files, use all .md files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wave_dir = Path(tmpdir) / "wave-results" / "wave-1"
+            wave_dir.mkdir(parents=True)
+            # Only 2 consolidated (need 4)
+            for name in [
+                "step-039-to-042-literature-searcher.md",
+                "step-043-to-046-seminal-works-analyst.md",
+            ]:
+                (wave_dir / name).write_text(self._make_content(["LS-001", "LS-002", "LS-003"]))
+            # 2 individual
+            for name in ["file-a.md", "file-b.md"]:
+                (wave_dir / name).write_text(self._make_content(["LS-001", "LS-002", "LS-003"]))
+            result = validate_gate(tmpdir, "gate-1")
+            # All 4 files counted (fallback to all)
+            self.assertEqual(result["files_checked"], 4)
+
+    def test_consolidated_l0_size_check(self):
+        """L0 size check applies to consolidated files too."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wave_dir = Path(tmpdir) / "wave-results" / "wave-1"
+            wave_dir.mkdir(parents=True)
+            names = [
+                "step-039-to-042-literature-searcher.md",
+                "step-043-to-046-seminal-works-analyst.md",
+                "step-047-to-050-trend-analyst.md",
+                "step-051-to-054-methodology-scanner.md",
+            ]
+            for i, name in enumerate(names):
+                if i == 0:
+                    (wave_dir / name).write_text("tiny")  # Below MIN_OUTPUT_SIZE
+                else:
+                    (wave_dir / name).write_text(self._make_content(["LS-001", "LS-002", "LS-003"]))
+            result = validate_gate(tmpdir, "gate-1")
+            self.assertEqual(result["status"], "fail")
+            self.assertTrue(any("L0" in e for e in result["errors"]))
+
+    def test_consolidated_regex_rejects_invalid_names(self):
+        """Invalid consolidated filenames are not treated as consolidated."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            wave_dir = Path(tmpdir) / "wave-results" / "wave-1"
+            wave_dir.mkdir(parents=True)
+            # Invalid: trailing hyphen in agent name
+            (wave_dir / "step-039-to-042-bad-.md").write_text(self._make_content(["LS-001", "LS-002", "LS-003"]))
+            # Invalid: non-3-digit
+            (wave_dir / "step-39-to-42-agent.md").write_text(self._make_content(["LS-001", "LS-002", "LS-003"]))
+            # These 2 shouldn't be treated as consolidated → 0 consolidated < 4 min_files
+            # So gate falls back to all_md (2 files) < 4 → fail
+            result = validate_gate(tmpdir, "gate-1")
+            self.assertEqual(result["status"], "fail")
+
+
 if __name__ == "__main__":
     unittest.main()

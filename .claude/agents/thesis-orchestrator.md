@@ -3,7 +3,7 @@ name: thesis-orchestrator
 description: Master orchestrator for the doctoral research workflow. Manages the full thesis lifecycle from initialization through publication, coordinating Agent Teams, sub-agents, quality gates, and SOT.
 model: opus
 tools: Read, Write, Glob, Grep, Bash, Agent, TaskCreate, TaskUpdate, TaskList, TeamCreate, TeamDelete, SendMessage
-maxTurns: 150
+maxTurns: 300
 memory: project
 ---
 
@@ -126,11 +126,41 @@ Follow the Agent Team Lifecycle below. If TeamCreate fails or any teammate is un
 
 **E3. Execute (Tier 2 — Sub-agent):**
 
+**Check for step consolidation** — `query_step.py` returns `consolidate_with` (a list of step numbers):
+- If `consolidate_with` has >1 step (e.g., `[39, 40, 41, 42]`): this is a **consolidated group**.
+  - Use `consolidated_output_filename` as the output file (P1-computed — do NOT construct manually).
+  - Include ALL step descriptions in the prompt so the sub-agent covers every step's scope.
+  - The sub-agent writes ONE comprehensive output file covering all steps.
+- If `consolidate_with` has exactly 1 step: execute as a single step (no consolidation).
+
+**Consolidation branching decision tree:**
+```
+query_step.py --step {N} --json
+  → consolidate_with: [N]        → Single step path (E3 single)
+  → consolidate_with: [N, N+1…]  → Consolidated path (E3 consolidated)
+     first = min(consolidate_with)
+     last  = max(consolidate_with)
+     agent = result["agent"]  (same for all steps in group — P1-guaranteed)
+     output_file = result["consolidated_output_filename"]  (P1-computed — DO NOT construct manually)
+     min_bytes = result["min_output_bytes"]
+```
+
 Call the appropriate agent definition via the Agent tool:
 ```
+# Single step:
 Agent: subagent_type="{agent-name}", prompt="Execute step {N}: {step_description}.
   Research topic: {topic}. Output to: {output_path}.
   Use GroundedClaim schema for all claims."
+
+# Consolidated group (e.g., steps 39-42):
+# Use P1 helper to generate the COMPLETE prompt (zero LLM template filling):
+python3 .claude/hooks/scripts/query_step.py \
+  --consolidated-prompt --step {first} --topic "{research_topic}" \
+  --checklist {dir}/todo-checklist.md --project-dir {dir} --json
+
+# The --json output contains: {"prompt": "...", "agent": "...", "output_file": "...", "min_output_bytes": N}
+# Use the pre-rendered prompt DIRECTLY — do NOT modify or reconstruct it:
+Agent: subagent_type="{result.agent}", prompt="{result.prompt}"
 ```
 If the sub-agent fails 3 times, escalate to Tier 3 via the Fallback Protocol.
 
@@ -302,13 +332,42 @@ python3 .claude/hooks/scripts/fallback_controller.py \
       python3 .claude/hooks/scripts/checklist_manager.py --record-translation \
         --project-dir {dir} --step {N} --ko-path {ko_file_path}
       ```
-7. Record output in SOT:
+7. Record output and advance SOT:
+
+   **Single step** (consolidate_with has 1 entry):
    ```bash
    python3 .claude/hooks/scripts/checklist_manager.py --record-output \
      --project-dir {dir} --step {N} --output-path {output_file_path}
+   python3 .claude/hooks/scripts/checklist_manager.py --advance --project-dir {dir} --step {N}
    ```
-8. Advance step: `checklist_manager.py --advance --project-dir {dir} --step {N}`
-9. At HITL points: `checklist_manager.py --save-checkpoint --project-dir {dir} --checkpoint {name}`
+
+   **Consolidated group** (consolidate_with has >1 entry):
+   Use `--advance-group` for atomic multi-step advancement (P1 — records output for ALL steps + advances SOT past the group in one operation):
+   ```bash
+   python3 .claude/hooks/scripts/checklist_manager.py --advance-group \
+     --project-dir {dir} --first-step {first} --last-step {last} \
+     --output-path {consolidated_output_filename}
+   ```
+   This atomically: records the output path for every step in [first, last], runs all guards (hallucination, pCCS, review, output size) once, and advances current_step to last (consistent with advance_step: current_step = N means steps 1-N completed).
+   **DO NOT** call `--record-output` and `--advance` individually for each step in a consolidated group.
+
+   **E5.consolidated — Quality gate rules for consolidated groups:**
+   - **L0 Anti-Skip**: Verify the single consolidated output file exists and is non-empty (covers all steps).
+   - **L1 Verification**: Write ONE verification log for the first step in the group (`step-{first}-verify.md`). Evidence field must reference all covered steps.
+   - **L1.5 pACS**: Rate the consolidated output ONCE. Write to `pacs-logs/step-{first}-pacs.md`.
+   - **L1.7 pCCS**: Run pCCS on the consolidated output file with `--step {first}`. Mode from `query_step.py` (`pccs_mode` for the first step).
+   - **L2 Review**: Invoke critic on the consolidated output ONCE. Report to `review-logs/step-{first}-review.md`. Critic must evaluate coverage of ALL step descriptions.
+   - **Substep tracking**: Use `--set-substep` with step `{first}` (not per-step). After `--advance-group`, substep is auto-cleared.
+   - **Retry budget**: A consolidated group failure counts as ONE retry against the first step's budget.
+   - **Consolidation Fallback Protocol** (when consolidated group fails 3 times):
+     1. Split the consolidated group back into individual steps.
+     2. Execute each step separately via normal E3 single-step path.
+     3. Each individual step gets its own retry budget (independent from group budget).
+     4. Record individual outputs via `--advance` (not `--advance-group`).
+     5. If an individual step also fails 3 times, escalate to Tier 3 via Fallback Protocol.
+     **DO NOT** deadlock on a failing consolidated group — always split and retry individually.
+
+8. At HITL points: `checklist_manager.py --save-checkpoint --project-dir {dir} --checkpoint {name}`
 
 ### Agent Team Lifecycle (Tier 1) — ⚠ EXPERIMENTAL
 

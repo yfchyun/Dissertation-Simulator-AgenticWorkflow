@@ -16,6 +16,9 @@ from query_step import (
     _get_pccs_config,
     _get_phase,
     _get_wave,
+    generate_consolidated_prompt,
+    get_invocation_plan,
+    get_next_execution_step,
     list_agents,
     list_steps_for_agent,
     query_step,
@@ -464,6 +467,247 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("trend-analyst", result.stdout)
         self.assertIn("Tier: 2", result.stdout)
+
+
+# =============================================================================
+# F-1: Tests for get_invocation_plan()
+# =============================================================================
+
+class TestGetInvocationPlan(unittest.TestCase):
+    """Tests for get_invocation_plan() — P1 invocation plan computation."""
+
+    def test_returns_list(self):
+        plan = get_invocation_plan(0)
+        self.assertIsInstance(plan, list)
+        self.assertGreater(len(plan), 0)
+
+    def test_total_field_consistent(self):
+        plan = get_invocation_plan(0)
+        total = plan[0]["total"]
+        for entry in plan:
+            self.assertEqual(entry["total"], total)
+
+    def test_all_entries_have_required_keys(self):
+        plan = get_invocation_plan(0)
+        for entry in plan:
+            self.assertIn("invocation", entry)
+            self.assertIn("start", entry)
+            self.assertIn("end", entry)
+            self.assertIn("label", entry)
+            self.assertIn("status", entry)
+            self.assertIn("total", entry)
+
+    def test_covers_all_210_steps(self):
+        """Invocation plan must cover steps 1-210 with no gaps."""
+        plan = get_invocation_plan(0)
+        # First entry starts at 1
+        self.assertEqual(plan[0]["start"], 1)
+        # Last entry ends at 210
+        self.assertEqual(plan[-1]["end"], 210)
+        # No gaps between entries
+        for i in range(1, len(plan)):
+            self.assertEqual(plan[i]["start"], plan[i - 1]["end"] + 1)
+
+    def test_step_0_all_pending(self):
+        plan = get_invocation_plan(0)
+        for entry in plan:
+            self.assertEqual(entry["status"], "pending")
+
+    def test_step_210_all_completed(self):
+        plan = get_invocation_plan(210)
+        for entry in plan:
+            self.assertEqual(entry["status"], "completed")
+
+    def test_mid_workflow_mixed_status(self):
+        plan = get_invocation_plan(50)
+        statuses = [e["status"] for e in plan]
+        self.assertIn("completed", statuses)
+        self.assertIn("in_progress", statuses)
+        self.assertIn("pending", statuses)
+
+    def test_exactly_one_in_progress(self):
+        """At any valid step, there should be exactly one in_progress invocation."""
+        for step in [1, 50, 100, 150, 200]:
+            plan = get_invocation_plan(step)
+            in_progress = [e for e in plan if e["status"] == "in_progress"]
+            self.assertEqual(len(in_progress), 1, f"step={step}")
+
+    def test_invocation_numbers_sequential(self):
+        plan = get_invocation_plan(0)
+        for i, entry in enumerate(plan, 1):
+            self.assertEqual(entry["invocation"], i)
+
+
+# =============================================================================
+# F-1: Tests for get_next_execution_step()
+# =============================================================================
+
+class TestGetNextExecutionStep(unittest.TestCase):
+    """Tests for get_next_execution_step() — P1 next step computation."""
+
+    def test_step_0_returns_step_1(self):
+        result = get_next_execution_step(0)
+        self.assertEqual(result["next_step"], 1)
+        self.assertEqual(result["reason"], "normal")
+
+    def test_step_210_completed(self):
+        result = get_next_execution_step(210)
+        self.assertIsNone(result["next_step"])
+        self.assertEqual(result["reason"], "workflow_completed")
+        self.assertIsNone(result["agent"])
+
+    def test_step_211_completed(self):
+        result = get_next_execution_step(211)
+        self.assertIsNone(result["next_step"])
+        self.assertEqual(result["reason"], "workflow_completed")
+
+    def test_negative_step_no_crash(self):
+        """F-3: Negative step should not crash (treated as 0)."""
+        result = get_next_execution_step(-1)
+        self.assertEqual(result["next_step"], 1)
+        self.assertEqual(result["reason"], "normal")
+
+    def test_negative_large_no_crash(self):
+        result = get_next_execution_step(-100)
+        self.assertEqual(result["next_step"], 1)
+
+    def test_mid_consolidation_restarts_group(self):
+        """current_step=40 means steps 1-40 done; step 41 is next but 39-42 is a group."""
+        result = get_next_execution_step(40)
+        self.assertEqual(result["next_step"], 39)
+        self.assertEqual(result["reason"], "restart_consolidated_group")
+        self.assertIsNotNone(result["consolidated_group"])
+        self.assertEqual(min(result["consolidated_group"]), 39)
+        self.assertEqual(max(result["consolidated_group"]), 42)
+
+    def test_group_start_returns_normal(self):
+        """current_step=38 means start fresh with group 39-42."""
+        result = get_next_execution_step(38)
+        self.assertEqual(result["next_step"], 39)
+        self.assertEqual(result["reason"], "normal")
+        self.assertIsNotNone(result["consolidated_group"])
+        self.assertEqual(result["consolidated_group"], [39, 40, 41, 42])
+
+    def test_group_end_returns_next_group(self):
+        """current_step=42 means group 39-42 done; next is 43-46."""
+        result = get_next_execution_step(42)
+        self.assertEqual(result["next_step"], 43)
+        self.assertEqual(result["reason"], "normal")
+        self.assertIsNotNone(result["consolidated_group"])
+        self.assertEqual(min(result["consolidated_group"]), 43)
+
+    def test_single_step_no_group(self):
+        """_orchestrator steps return no consolidated_group."""
+        result = get_next_execution_step(0)  # next is step 1 (_orchestrator)
+        self.assertIsNone(result["consolidated_group"])
+
+    def test_has_agent_field(self):
+        result = get_next_execution_step(38)
+        self.assertIn("agent", result)
+        self.assertIsNotNone(result["agent"])
+
+    def test_has_description_field(self):
+        result = get_next_execution_step(38)
+        self.assertIn("description", result)
+        self.assertIsNotNone(result["description"])
+
+    def test_all_wave1_mid_group_restarts(self):
+        """Every mid-group step in wave 1 should trigger restart."""
+        for step in [39, 40, 41]:  # mid-group for [39,40,41,42]
+            result = get_next_execution_step(step)
+            self.assertEqual(result["reason"], "restart_consolidated_group",
+                             f"step={step} should restart")
+            self.assertEqual(result["next_step"], 39, f"step={step}")
+
+
+# =============================================================================
+# F-1: Tests for generate_consolidated_prompt()
+# =============================================================================
+
+class TestGenerateConsolidatedPrompt(unittest.TestCase):
+    """Tests for generate_consolidated_prompt() — P1 prompt generation."""
+
+    def test_normal_group_returns_dict(self):
+        result = generate_consolidated_prompt(39, 42, "Impact of AI on education")
+        self.assertIsInstance(result, dict)
+        self.assertIn("prompt", result)
+        self.assertIn("agent", result)
+        self.assertIn("output_file", result)
+        self.assertIn("min_output_bytes", result)
+
+    def test_prompt_contains_all_steps(self):
+        result = generate_consolidated_prompt(39, 42, "AI in education")
+        prompt = result["prompt"]
+        for step in range(39, 43):
+            self.assertIn(f"Step {step}", prompt)
+
+    def test_prompt_contains_research_topic(self):
+        topic = "Machine learning in healthcare"
+        result = generate_consolidated_prompt(39, 42, topic)
+        self.assertIn(topic, result["prompt"])
+
+    def test_output_file_matches_group(self):
+        result = generate_consolidated_prompt(39, 42, "test topic")
+        self.assertIn("step-039-to-042", result["output_file"])
+        self.assertIn("literature-searcher", result["output_file"])
+
+    def test_agent_is_correct(self):
+        result = generate_consolidated_prompt(39, 42, "test topic")
+        self.assertEqual(result["agent"], "literature-searcher")
+
+    def test_min_output_bytes_positive(self):
+        result = generate_consolidated_prompt(39, 42, "test topic")
+        self.assertGreater(result["min_output_bytes"], 0)
+
+    def test_zero_unfilled_template_variables(self):
+        """The core hallucination prevention: no {placeholder} in output."""
+        result = generate_consolidated_prompt(39, 42, "test topic")
+        prompt = result["prompt"]
+        import re
+        placeholders = re.findall(r'\{[a-z_]+\}', prompt)
+        self.assertEqual(placeholders, [], f"Found unfilled templates: {placeholders}")
+
+    def test_prompt_has_structure_requirement(self):
+        result = generate_consolidated_prompt(39, 42, "test topic")
+        self.assertIn("## Step", result["prompt"])
+        self.assertIn("GroundedClaim", result["prompt"])
+
+    # --- Input validation tests (F-2) ---
+
+    def test_first_step_greater_than_last_raises(self):
+        with self.assertRaises(ValueError):
+            generate_consolidated_prompt(42, 39, "test")
+
+    def test_step_out_of_range_low_raises(self):
+        with self.assertRaises(ValueError):
+            generate_consolidated_prompt(0, 3, "test")
+
+    def test_step_out_of_range_high_raises(self):
+        with self.assertRaises(ValueError):
+            generate_consolidated_prompt(208, 211, "test")
+
+    def test_subset_of_group_raises(self):
+        """F-2: Calling with subset (40,42) when group is (39,42) must raise."""
+        with self.assertRaises(ValueError):
+            generate_consolidated_prompt(40, 42, "test")
+
+    def test_partial_group_raises(self):
+        """F-2: Calling with (39,41) when group is (39,42) must raise."""
+        with self.assertRaises(ValueError):
+            generate_consolidated_prompt(39, 41, "test")
+
+    def test_wave2_group(self):
+        result = generate_consolidated_prompt(59, 62, "test topic")
+        self.assertEqual(result["agent"], "theoretical-framework-analyst")
+        self.assertIn("step-059-to-062", result["output_file"])
+
+    def test_wave3_group(self):
+        result = generate_consolidated_prompt(79, 82, "test topic")
+        self.assertEqual(result["agent"], "critical-reviewer")
+
+    def test_wave4_group(self):
+        result = generate_consolidated_prompt(99, 102, "test topic")
+        self.assertEqual(result["agent"], "synthesis-agent")
 
 
 if __name__ == "__main__":

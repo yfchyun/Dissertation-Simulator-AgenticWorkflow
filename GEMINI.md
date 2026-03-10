@@ -76,6 +76,8 @@ AgenticWorkflow에는 210-step 박사 논문 연구 시뮬레이션 워크플로
 | 58개 전문 에이전트 (기반 11 + 논문 46 + 통합 1) | Gemini는 단일 세션 모델. 에이전트별 역할을 프롬프트로 명시하여 시뮬레이션 |
 | 26개 논문 Slash Commands | `/thesis-init` 등은 Claude Code 전용. Gemini에서는 `checklist_manager.py --init` 등 CLI 직접 호출 |
 | GroundedClaim 스키마 | `validate_grounded_claim.py`로 claim ID 검증. Gemini 출력도 동일 스키마 준수 필수 |
+| Step Consolidation | 동일 에이전트 연속 Step을 단일 호출로 통합 (210→17 invocations). `query_step.py --consolidated-prompt`, `--next-step`, `--invocation-plan` CLI로 제어. Gemini에서는 해당 CLI를 직접 호출하여 통합 프롬프트·다음 Step을 결정론적으로 획득 |
+| Consolidation Fallback | 통합 그룹 3회 실패 시 개별 Step으로 분리 재시도. `checklist_manager.py --advance-group` CLI로 원자적 SOT 갱신 |
 | 3-tier Fallback | Team → Sub-agent → Direct. Gemini는 Direct 실행만 가능 |
 
 ## 컨텍스트 보존

@@ -16,6 +16,7 @@ _check_sot_write_safety() false positives (R6 design decision).
 Usage:
   python3 checklist_manager.py --init --project-dir <dir> [--research-type <type>]
   python3 checklist_manager.py --advance --project-dir <dir> --step <N>
+  python3 checklist_manager.py --advance-group --project-dir <dir> --first-step <N> --last-step <M> --output-path <path>
   python3 checklist_manager.py --status --project-dir <dir>
   python3 checklist_manager.py --save-checkpoint --project-dir <dir> --checkpoint <name>
   python3 checklist_manager.py --restore-checkpoint --project-dir <dir> --checkpoint <name>
@@ -956,6 +957,9 @@ def advance_step(project_dir: Path, target_step: int, force: bool = False) -> di
     # H-6: Review verdict guard — verify L2 review passed (if applicable)
     _warn_if_review_failed(project_dir, current)
 
+    # H-7: Output size guard — verify output meets minimum size threshold
+    _warn_if_output_too_small(project_dir, current)
+
     sot["current_step"] = target_step
     sot["execution_substep"] = None  # Clear sub-step on step advance
     write_thesis_sot(project_dir, sot)
@@ -1112,6 +1116,155 @@ def _warn_if_review_failed(project_dir: Path, step: int) -> None:
             f"See: {review_log}",
             file=sys.stderr,
         )
+
+
+def _warn_if_output_too_small(project_dir: Path, step: int) -> None:
+    """Check if step output meets min_output_bytes from query_step.py (H-6 guard).
+
+    Calls query_step.py to get the expected minimum output size, then checks
+    the actual output file registered in SOT. If below threshold, warns.
+
+    Non-blocking: always returns None. Prints WARNING to stderr if violation.
+    P1 Compliance: subprocess + file stat — deterministic, no LLM.
+    """
+    if step <= 0:
+        return
+
+    script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "query_step.py",
+    )
+    if not os.path.exists(script):
+        return
+
+    try:
+        result = subprocess.run(
+            [sys.executable, script, "--step", str(step),
+             "--project-dir", str(project_dir),
+             "--field", "min_output_bytes", "--json"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return
+        min_bytes = json.loads(result.stdout.strip())
+        if not isinstance(min_bytes, int) or min_bytes <= 0:
+            return
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+        return
+
+    # Read output path from SOT
+    try:
+        sot = read_thesis_sot(project_dir)
+    except Exception:
+        return
+
+    output_path = sot.get("outputs", {}).get(f"step-{step}")
+    if not output_path:
+        return  # No output recorded — skip (might be _orchestrator step)
+
+    full_path = project_dir / output_path
+    if not full_path.exists():
+        return  # File doesn't exist — L0 anti-skip will catch this
+
+    actual_size = full_path.stat().st_size
+    if actual_size < min_bytes:
+        print(
+            f"[Output Size WARNING] Step {step}: output is {actual_size} bytes, "
+            f"below minimum {min_bytes} bytes. Consider re-executing this step "
+            f"for more comprehensive output. File: {output_path}",
+            file=sys.stderr,
+        )
+
+
+def advance_group(
+    project_dir: Path,
+    first_step: int,
+    last_step: int,
+    output_path: str,
+    force: bool = False,
+) -> dict:
+    """P1 atomic operation: record output + advance SOT for consolidated steps.
+
+    When steps are consolidated (e.g., steps 39-42 executed as one sub-agent call),
+    this function atomically records the output for ALL steps in the range and
+    advances the SOT past the last step.
+
+    Steps:
+        1. Validate: current_step == first_step - 1 (prior step completed)
+        2. Check step dependencies for last_step (gate/HITL prerequisites)
+        3. Record output_path for EACH step in [first_step, last_step]
+        4. Run guards once (hallucination, pCCS, review, output size) — on first_step basis
+        5. Set current_step = last_step (consistent with advance_step semantics)
+
+    Args:
+        project_dir: Thesis project directory
+        first_step: First step in the consolidated group
+        last_step: Last step in the consolidated group (inclusive)
+        output_path: Shared output file path (relative to project_dir)
+        force: If True, skip pCCS blocking checks
+
+    Returns:
+        Updated SOT dict
+
+    Raises:
+        ValueError: If current_step != first_step - 1, or first > last, or invalid range
+
+    P1 Compliance: Pure file I/O + subprocess (guards) — deterministic, no LLM.
+    SOT Compliance: Single writer (Orchestrator calls this via CLI).
+    """
+    if first_step > last_step:
+        raise ValueError(f"first_step ({first_step}) > last_step ({last_step})")
+    if last_step - first_step + 1 > 6:
+        raise ValueError(
+            f"Group size {last_step - first_step + 1} exceeds safety cap of 6 "
+            f"(aligned with query_step.py _MAX_CONSOLIDATION_SIZE)"
+        )
+
+    sot = read_thesis_sot(project_dir)
+    current = sot.get("current_step", 0)
+
+    if current != first_step - 1:
+        raise ValueError(
+            f"Cannot advance group [{first_step}-{last_step}]: "
+            f"current_step is {current}, expected {first_step - 1}"
+        )
+
+    total = sot.get("total_steps", 210)
+    if last_step > total:
+        raise ValueError(
+            f"Last step {last_step} exceeds total_steps ({total})"
+        )
+
+    # Check step dependencies (consistent with advance_step)
+    if not force:
+        unmet = check_step_dependencies(sot, last_step)
+        if unmet:
+            raise ValueError(
+                f"Unmet dependencies for step {last_step}:\n"
+                + "\n".join(f"  - {u}" for u in unmet)
+            )
+
+    # Record output for each step in the group
+    outputs = sot.setdefault("outputs", {})
+    for step in range(first_step, last_step + 1):
+        key = f"step-{step}"
+        outputs[key] = output_path
+
+    # Run guards once — on first_step basis (all steps share same output)
+    _warn_if_hallucinations(project_dir, first_step)
+    _warn_if_pccs_noncompliant(sot, first_step, force=force)
+    _warn_if_review_failed(project_dir, first_step)
+    _warn_if_output_too_small(project_dir, first_step)
+
+    # Advance to last_step (consistent with advance_step: current_step = N means steps 1-N done)
+    sot["current_step"] = last_step
+    sot["execution_substep"] = None
+    write_thesis_sot(project_dir, sot)
+
+    # Sync checklist
+    _sync_checklist(project_dir, sot)
+
+    return sot
 
 
 def set_execution_substep(project_dir: Path, substep: str | None) -> dict:
@@ -1882,12 +2035,15 @@ def main():
     group.add_argument("--dialogue-end", action="store_true", help="Finalize dialogue loop with outcome")
     group.add_argument("--set-substep", metavar="SUBSTEP", help="Record current execution sub-step within active step (e.g. L1_verification, L2_dialogue_round_2); use 'clear' to reset")
     group.add_argument("--update-pccs-cal", action="store_true", help="Update pCCS calibration data in SOT")
+    group.add_argument("--advance-group", action="store_true", help="Advance consolidated step group atomically")
 
     parser.add_argument("--project-name", help="Project name (default: directory name)")
     parser.add_argument("--research-type", choices=sorted(VALID_RESEARCH_TYPES))
     parser.add_argument("--input-mode", choices=sorted(VALID_INPUT_MODES))
     parser.add_argument("--execution-mode", choices=sorted(VALID_EXECUTION_MODES))
     parser.add_argument("--step", type=int, help="Target step number (for --advance)")
+    parser.add_argument("--first-step", type=int, help="First step in group (for --advance-group)")
+    parser.add_argument("--last-step", type=int, help="Last step in group (for --advance-group)")
     parser.add_argument("--checkpoint", help="Checkpoint name")
     parser.add_argument("--hitl-status", default="completed", help="HITL status (default: completed)")
     parser.add_argument("--hitl-name", help="HITL name (for --is-hitl-blocking)")
@@ -1953,6 +2109,43 @@ def main():
         return _cli_set_substep(args)
     elif args.update_pccs_cal:
         return _cli_update_pccs_cal(args)
+    elif args.advance_group:
+        return _cli_advance_group(args)
+
+
+def _cli_advance_group(args) -> int:
+    """Handle --advance-group command.
+
+    Atomically records output and advances SOT for a consolidated step group.
+    Usage: --advance-group --project-dir DIR --first-step N --last-step M --output-path PATH
+    """
+    project_dir = Path(args.project_dir)
+    first_step = getattr(args, "first_step", None)
+    last_step = getattr(args, "last_step", None)
+    output_path = getattr(args, "output_path", None)
+    force = getattr(args, "force", False)
+
+    if first_step is None or last_step is None or output_path is None:
+        print(
+            "ERROR: --advance-group requires --first-step N --last-step M --output-path PATH",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        sot = advance_group(project_dir, first_step, last_step, output_path, force=force)
+        section = get_checklist_section_for_step(last_step)
+        group_size = last_step - first_step + 1
+        print(
+            f"Advanced group [{first_step}-{last_step}] ({group_size} steps) "
+            f"to step {sot.get('current_step', '?')} (section: {section})"
+        )
+        print(f"  Progress: {sot.get('current_step', '?')}/{sot['total_steps']}")
+        print(f"  Output: {output_path}")
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _cli_dialogue_start(args) -> int:

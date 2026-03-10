@@ -767,5 +767,185 @@ class TestDialogueCommands(unittest.TestCase):
                         "dialogue-logs/ must be created by init_project")
 
 
+class TestAdvanceGroup(unittest.TestCase):
+    """Test advance_group() — atomic consolidated step advancement."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.project_dir = self.tmpdir / "thesis"
+        cm.init_project(self.project_dir, "Test")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_normal_group_advance(self):
+        """advance_group(first=1, last=3) with current=0 should set current=3."""
+        sot = cm.advance_group(
+            self.project_dir, first_step=1, last_step=3,
+            output_path="wave-results/step-001-to-003-test.md",
+        )
+        self.assertEqual(sot["current_step"], 3)
+
+    def test_output_recorded_for_all_steps(self):
+        """Each step in the group should have the shared output path recorded."""
+        cm.advance_group(
+            self.project_dir, first_step=1, last_step=3,
+            output_path="output.md",
+        )
+        sot = cm.read_thesis_sot(self.project_dir)
+        for step in (1, 2, 3):
+            self.assertEqual(sot["outputs"][f"step-{step}"], "output.md")
+
+    def test_checklist_synced(self):
+        """Steps 1-3 should be [x] and step 4 should be [ ] after group advance."""
+        cm.advance_group(
+            self.project_dir, first_step=1, last_step=3,
+            output_path="output.md",
+        )
+        cl = (self.project_dir / cm.THESIS_CHECKLIST_FILENAME).read_text()
+        self.assertIn("- [x] Step 1:", cl)
+        self.assertIn("- [x] Step 3:", cl)
+        self.assertIn("- [ ] Step 4:", cl)
+
+    def test_precondition_current_must_be_first_minus_one(self):
+        """advance_group requires current_step == first_step - 1."""
+        cm.advance_step(self.project_dir, 5)  # current = 5
+        with self.assertRaises(ValueError) as ctx:
+            cm.advance_group(
+                self.project_dir, first_step=3, last_step=5,
+                output_path="output.md",
+            )
+        self.assertIn("expected 2", str(ctx.exception))
+
+    def test_precondition_matches_advance_step(self):
+        """After advance_step(5), advance_group(6, 8) should work."""
+        cm.advance_step(self.project_dir, 5)  # current = 5
+        sot = cm.advance_group(
+            self.project_dir, first_step=6, last_step=8,
+            output_path="output.md",
+        )
+        self.assertEqual(sot["current_step"], 8)
+
+    def test_first_greater_than_last_raises(self):
+        """first_step > last_step should raise ValueError."""
+        with self.assertRaises(ValueError):
+            cm.advance_group(
+                self.project_dir, first_step=5, last_step=3,
+                output_path="output.md",
+            )
+
+    def test_group_exceeds_safety_cap(self):
+        """Group size > 6 should raise ValueError (aligned with _MAX_CONSOLIDATION_SIZE)."""
+        with self.assertRaises(ValueError):
+            cm.advance_group(
+                self.project_dir, first_step=1, last_step=12,
+                output_path="output.md",
+            )
+
+    def test_last_step_exceeds_total(self):
+        """last_step > total_steps should raise ValueError."""
+        with self.assertRaises(ValueError):
+            cm.advance_group(
+                self.project_dir, first_step=1, last_step=999,
+                output_path="output.md",
+            )
+
+    def test_substep_cleared(self):
+        """execution_substep should be None after advance_group."""
+        sot = cm.read_thesis_sot(self.project_dir)
+        sot["execution_substep"] = "L1_verification"
+        cm.write_thesis_sot(self.project_dir, sot)
+        sot = cm.advance_group(
+            self.project_dir, first_step=1, last_step=3,
+            output_path="output.md",
+        )
+        self.assertIsNone(sot["execution_substep"])
+
+    def test_sequential_group_then_step(self):
+        """advance_group(1,3) then advance_step(4) should work."""
+        cm.advance_group(
+            self.project_dir, first_step=1, last_step=3,
+            output_path="output.md",
+        )
+        sot = cm.advance_step(self.project_dir, 4)
+        self.assertEqual(sot["current_step"], 4)
+
+    def test_sequential_groups(self):
+        """Two consecutive groups should work."""
+        cm.advance_group(
+            self.project_dir, first_step=1, last_step=3,
+            output_path="out1.md",
+        )
+        sot = cm.advance_group(
+            self.project_dir, first_step=4, last_step=6,
+            output_path="out2.md",
+        )
+        self.assertEqual(sot["current_step"], 6)
+
+
+class TestAdvanceGroupCLI(unittest.TestCase):
+    """Test --advance-group CLI handler."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.project_dir = self.tmpdir / "thesis"
+        cm.init_project(self.project_dir, "Test")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_cli_advance_group_success(self):
+        """CLI --advance-group with valid args should return 0."""
+        import subprocess
+        script = str(Path(__file__).parent / "checklist_manager.py")
+        result = subprocess.run(
+            [sys.executable, script,
+             "--advance-group",
+             "--project-dir", str(self.project_dir),
+             "--first-step", "1",
+             "--last-step", "3",
+             "--output-path", "output.md"],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Advanced group [1-3]", result.stdout)
+
+    def test_cli_advance_group_missing_args(self):
+        """CLI --advance-group without required args should return 1."""
+        import subprocess
+        script = str(Path(__file__).parent / "checklist_manager.py")
+        result = subprocess.run(
+            [sys.executable, script,
+             "--advance-group",
+             "--project-dir", str(self.project_dir)],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("requires", result.stderr)
+
+    def test_cli_advance_group_bad_precondition(self):
+        """CLI --advance-group with wrong current_step should return 1."""
+        import subprocess
+        script = str(Path(__file__).parent / "checklist_manager.py")
+        # First advance to step 5
+        subprocess.run(
+            [sys.executable, script,
+             "--advance", "--project-dir", str(self.project_dir),
+             "--step", "5"],
+            capture_output=True, text=True, timeout=10,
+        )
+        # Try group starting at 3 (expects current=2 but current=5)
+        result = subprocess.run(
+            [sys.executable, script,
+             "--advance-group",
+             "--project-dir", str(self.project_dir),
+             "--first-step", "3",
+             "--last-step", "5",
+             "--output-path", "output.md"],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

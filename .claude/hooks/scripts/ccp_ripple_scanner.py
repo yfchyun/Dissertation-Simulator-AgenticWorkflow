@@ -165,6 +165,22 @@ D7_SYNC_PAIRS: Dict[str, List[str]] = {
     ".claude/hooks/scripts/extract_json_block.py": [
         ".claude/commands/predict-failures.md",                   # orchestrates Phase B→C handoffs
     ],
+    # Step consolidation + invocation plan — shared _INVOCATION_PLAN and advance_group contract
+    ".claude/hooks/scripts/query_step.py": [
+        ".claude/hooks/scripts/checklist_manager.py",             # advance_group consumes consolidation config
+        ".claude/agents/thesis-orchestrator.md",                  # E3/E5 execute consolidation
+        ".claude/commands/thesis-start.md",                       # invocation plan loop
+    ],
+    # Reverse D-7: files that depend on query_step.py consolidation/invocation contracts
+    ".claude/hooks/scripts/checklist_manager.py": [
+        ".claude/hooks/scripts/query_step.py",                    # advance_group safety cap + consolidation semantics
+    ],
+    ".claude/agents/thesis-orchestrator.md": [
+        ".claude/hooks/scripts/query_step.py",                    # E3/E5 consolidation protocol references
+    ],
+    ".claude/commands/thesis-start.md": [
+        ".claude/hooks/scripts/query_step.py",                    # invocation plan loop + step parameters
+    ],
 }
 
 # ---------------------------------------------------------------------------

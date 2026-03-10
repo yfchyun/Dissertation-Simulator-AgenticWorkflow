@@ -3033,6 +3033,7 @@ _KI_REQUIRED_DEFAULTS = {
     "diagnosis_patterns": [],
     "thesis_step": None,  # CM-3: thesis current_step at archive time (int or None)
     "gate_results": {},  # R-12: cross-session gate pass/fail tracking (e.g. {"gate-1": "pass"})
+    "invocation_number": None,  # B-3: active invocation number at archive time (int or None)
 }
 
 
@@ -3823,6 +3824,21 @@ def extract_session_facts(session_id, trigger, project_dir, entries, token_estim
     _thesis_step = _extract_thesis_step_at_archive(project_dir)
     if _thesis_step is not None:
         facts["thesis_step"] = _thesis_step
+
+    # B-3: invocation_number — active invocation at archive time for cross-session context.
+    # Uses thesis_step to compute which invocation block is active (deterministic).
+    # P1 Compliance: Deterministic computation from _INVOCATION_PLAN in query_step.py.
+    if _thesis_step is not None:
+        try:
+            scripts_dir = os.path.join(os.path.dirname(__file__))
+            sys.path.insert(0, scripts_dir)
+            from query_step import get_invocation_plan
+            plan = get_invocation_plan(_thesis_step)
+            in_progress = [p for p in plan if p["status"] == "in_progress"]
+            if in_progress:
+                facts["invocation_number"] = in_progress[0]["invocation"]
+        except (ImportError, ModuleNotFoundError, AttributeError):
+            pass  # Non-blocking: query_step.py may not exist or lack the function
 
     # Mark ETERNAL fields for archival protection
     facts["_eternal_fields"] = ["team_summaries", "diagnosis_patterns", "design_decisions"]

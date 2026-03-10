@@ -33,7 +33,7 @@ claude
 
 초기화 시 다음이 생성됩니다:
 - `thesis-output/[project-name]/session.json` — 논문 SOT
-- `thesis-output/[project-name]/todo-checklist.md` — 150-step 체크리스트
+- `thesis-output/[project-name]/todo-checklist.md` — 210-step 체크리스트
 - `thesis-output/[project-name]/research-synthesis.md` — 연구 합성 파일
 - `thesis-output/[project-name]/wave-results/` — Wave별 산출물 디렉터리
 - `thesis-output/[project-name]/checkpoints/` — 체크포인트 디렉터리
@@ -270,6 +270,25 @@ python .claude/hooks/scripts/query_step.py \
 # 전체 에이전트 목록
 python .claude/hooks/scripts/query_step.py --list-agents
 
+# 통합 프롬프트 생성 (Step Consolidation)
+python .claude/hooks/scripts/query_step.py \
+  --consolidated-prompt --step 39 --topic "AI in Education" \
+  --checklist thesis-output/my-thesis/todo-checklist.md --json
+
+# 다음 실행 step 결정 (mid-consolidation restart 자동 감지)
+python .claude/hooks/scripts/query_step.py \
+  --next-step --project-dir thesis-output/my-thesis --json
+
+# Invocation Plan 조회 (17개 Orchestrator 호출 계획)
+python .claude/hooks/scripts/query_step.py \
+  --invocation-plan --project-dir thesis-output/my-thesis --json
+
+# 통합 그룹 원자적 전진
+python .claude/hooks/scripts/checklist_manager.py \
+  --advance-group --first-step 39 --last-step 42 \
+  --output-path "wave-results/wave-1/step-039-to-042-literature-searcher.md" \
+  --project-dir thesis-output/my-thesis
+
 # 스킬 산출물 검증
 python .claude/hooks/scripts/validate_skill_output.py \
   --skill-dir .claude/skills/my-skill/
@@ -291,14 +310,14 @@ python .claude/hooks/scripts/run_pccs_pipeline.py \
 ```
 thesis-output/my-thesis/
 ├── session.json                  ← 논문 SOT
-├── todo-checklist.md             ← 150-step 체크리스트
+├── todo-checklist.md             ← 210-step 체크리스트
 ├── research-synthesis.md         ← 연구 합성 (3000-4000 단어)
-├── wave-results/                 ← Wave별 산출물
+├── wave-results/                 ← Wave별 산출물 (통합 모드)
 │   ├── wave-1/                   ← 기초 문헌 검색 결과
-│   │   ├── literature-search.md
-│   │   ├── seminal-works.md
-│   │   ├── trend-analysis.md
-│   │   └── methodology-scan.md
+│   │   ├── step-039-to-042-literature-searcher.md
+│   │   ├── step-043-to-046-seminal-works-analyst.md
+│   │   ├── step-047-to-050-trend-analyst.md
+│   │   └── step-051-to-054-methodology-scanner.md
 │   ├── wave-2/                   ← 심층 분석 결과
 │   ├── wave-3/                   ← 비판적 분석 결과
 │   ├── wave-4/                   ← 통합 합성 결과

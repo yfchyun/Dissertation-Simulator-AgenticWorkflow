@@ -1073,6 +1073,39 @@
 - **파급 효과**: `validate_skill_output.py`, `_test_validate_skill_output.py` (33 tests), `setup_init.py`
 - **관련 ADR**: ADR-024 (P1 봉쇄), ADR-054 (GroundedClaim Schema)
 
+### ADR-068: Step Consolidation — 210 step → 17 Invocations
+
+- **날짜**: 2026-03-10
+- **상태**: Accepted
+- **맥락**: 210-step 워크플로우에서 동일 에이전트의 연속 step(예: steps 39-42, 모두 literature-searcher)을 개별 호출하면 Orchestrator 오버헤드와 컨텍스트 소비가 과도하다. 에이전트 전환 없이 연속되는 step을 하나의 호출로 통합할 필요가 있었다.
+- **결정**: `query_step.py`에 3개 P1 함수 추가: `generate_consolidated_prompt()` (zero unfilled template variables), `get_next_execution_step()` (mid-consolidation restart 감지), `get_invocation_plan()` (17-invocation 매핑). `checklist_manager.py`에 `advance_group()` (원자적 SOT 그룹 전진). `_MAX_CONSOLIDATION_SIZE=6` 안전 상한. `translator`와 `_orchestrator`는 통합 제외.
+- **근거**: 절대 기준 1(품질) — Orchestrator 호출 감소로 컨텍스트 예산을 실제 연구 작업에 집중. P1 Sandwich로 프롬프트 할루시네이션 원천봉쇄.
+- **대안**: 단순 step 건너뛰기 → 기각 (SOT 일관성 파괴 위험). 에이전트별 maxTurns 증가 → 기각 (step 추적성 상실).
+- **파급 효과**: `query_step.py` (3 P1 함수), `checklist_manager.py` (`advance_group` + `--advance-group` CLI), `thesis-orchestrator.md` (E3 통합 경로), `validate_thesis_output.py` (통합파일 TO5/TO6 검증), `validate_wave_gate.py` (통합 모드 인식)
+- **관련 ADR**: ADR-064 (query_step.py), ADR-024 (P1 봉쇄)
+
+### ADR-069: Consolidation Fallback Protocol — 그룹 실패 시 분할 복구
+
+- **날짜**: 2026-03-10
+- **상태**: Accepted
+- **맥락**: 통합 그룹(예: 4 step을 1회 호출)이 3회 연속 실패하면 교착 상태에 빠질 위험이 있다. 단일 step의 문제가 전체 그룹을 차단하는 상황을 방지해야 했다.
+- **결정**: 3회 실패 → 그룹 분할 → 각 step 개별 실행. 개별 step의 재시도 예산은 그룹 예산과 독립. 개별 step도 3회 실패 시 Tier 3 Fallback으로 에스컬레이션.
+- **근거**: 절대 기준 1(품질) — 교착 방지로 워크플로우 완주 보장. 기존 3-tier Fallback과 조합하여 복원력 극대화.
+- **대안**: 그룹 재시도 횟수 증가 → 기각 (근본 원인 미해결). 실패 step만 분리 → 기각 (어떤 step이 실패했는지 통합 출력에서 식별 불가).
+- **파급 효과**: `thesis-orchestrator.md` (Consolidation Fallback Protocol 섹션)
+- **관련 ADR**: ADR-068 (Step Consolidation), ADR-015 (Fallback 체계)
+
+### ADR-070: validate_wave_gate.py 통합파일 모드 인식
+
+- **날짜**: 2026-03-10
+- **상태**: Accepted
+- **맥락**: Step Consolidation 도입 후 wave-results/ 디렉터리에 통합파일(step-039-to-042-*.md)과 개별파일(01-literature-search-strategy.md)이 공존할 수 있다. Cross-Validation Gate가 두 종류를 구분하지 못하면 claim 중복 카운트, 일관성 검사 왜곡이 발생한다.
+- **결정**: `validate_wave_gate.py`에 `_CONSOLIDATED_RE` 정규식 추가. 통합파일이 `min_files` 이상이면 통합파일만 사용, 혼합 상태 시 경고. `validate_thesis_output.py`에 TO6(prefix 균일성) 검증 추가 — 통합파일 내 claim prefix가 2개 이상이면 경고.
+- **근거**: ADR-068(Step Consolidation) 후속 — Gate/Output 검증이 통합 모드를 인식하지 못하면 품질 보장 체계에 구멍 발생.
+- **대안**: 혼합 상태 자체를 에러로 차단 → 기각 (Fallback Protocol로 인한 합법적 혼합 상태 존재).
+- **파급 효과**: `validate_wave_gate.py`, `validate_thesis_output.py`, `_test_validate_wave_gate.py` (9 tests)
+- **관련 ADR**: ADR-068 (Step Consolidation), ADR-054 (GroundedClaim Schema)
+
 ---
 
 ## 문서 관리

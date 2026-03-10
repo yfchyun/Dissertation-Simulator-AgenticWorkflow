@@ -52,6 +52,21 @@ Display in the status block:
 - 미번역 단계: {missing_steps or "없음"}
 ```
 
+### Step 2.7: Invocation Progress
+
+```bash
+python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/scripts/query_step.py \
+  --invocation-plan \
+  --project-dir "$CLAUDE_PROJECT_DIR/thesis-output/{project}"
+```
+
+Display in the status block:
+
+```
+- 실행 블록: {completed_invocations}/{total_invocations} invocations ({invocation_pct}%)
+- 현재 블록: {current_invocation_label}
+```
+
 ### Step 3: Show Next Steps
 
 Based on current position, display the next 3 pending steps from the checklist.

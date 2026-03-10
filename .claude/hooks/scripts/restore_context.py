@@ -783,6 +783,49 @@ def _build_active_thesis_step_block(project_dir: str) -> list[str]:
     if budgets:
         lines.append(f"Retry budgets: {budgets}")
 
+    # B-1: Invocation plan progress — surface which orchestrator invocation is active
+    # P1 Compliance: Imports get_invocation_plan() from query_step.py (deterministic).
+    # SOT Compliance: Read-only (uses current_step already read above).
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+        from query_step import get_invocation_plan
+        plan = get_invocation_plan(current_step)
+        completed_inv = sum(1 for p in plan if p["status"] == "completed")
+        in_progress = [p for p in plan if p["status"] == "in_progress"]
+        total_inv = plan[0]["total"] if plan else 17
+        lines.append(f"Invocation plan: {completed_inv}/{total_inv} completed")
+        if in_progress:
+            cur = in_progress[0]
+            lines.append(
+                f"→ Active invocation {cur['invocation']}/{total_inv}: "
+                f"Steps {cur['start']}-{cur['end']} ({cur['label']})"
+            )
+    except Exception:
+        pass  # Non-blocking: query_step.py may not exist in non-thesis projects
+
+    # B-2: Consolidated group state — surface if current step is mid-consolidation
+    # P1 Compliance: Uses get_next_execution_step() (deterministic, handles restart logic).
+    # Eliminates LLM math — Orchestrator reads the result, doesn't compute.
+    try:
+        from query_step import get_next_execution_step
+        next_info = get_next_execution_step(current_step)
+        ns = next_info.get("next_step")
+        if ns is not None:
+            reason = next_info.get("reason", "normal")
+            cg = next_info.get("consolidated_group")
+            if reason == "restart_consolidated_group" and cg:
+                lines.append(
+                    f"→ RESTART consolidated group Steps {min(cg)}-{max(cg)} "
+                    f"({next_info.get('agent', '?')}) — mid-group context reset detected"
+                )
+            elif cg:
+                lines.append(
+                    f"→ Next: consolidated group Steps {min(cg)}-{max(cg)} "
+                    f"({next_info.get('agent', '?')})"
+                )
+    except Exception:
+        pass  # Non-blocking
+
     return lines
 
 
@@ -1984,6 +2027,20 @@ def _retrieve_relevant_sessions(ki_path, task_info, file_paths, max_results=3,
         current_files = set(file_paths) if file_paths else set()
         current_file_basenames = {os.path.basename(f) for f in current_files if f}
 
+        # H-3: Pre-compute current invocation number OUTSIDE the loop.
+        # get_invocation_plan() is deterministic — same result for same current_step.
+        # Computing inside the loop would be O(N) redundant calls.
+        cur_invocation_number: int | None = None
+        if current_step is not None:
+            try:
+                from query_step import get_invocation_plan
+                _plan = get_invocation_plan(current_step)
+                _in_progress = [p for p in _plan if p["status"] == "in_progress"]
+                if _in_progress:
+                    cur_invocation_number = _in_progress[0]["invocation"]
+            except Exception:
+                pass  # Non-blocking
+
         scored = []
         for session in all_sessions:
             score = 0.0
@@ -2036,6 +2093,19 @@ def _retrieve_relevant_sessions(ki_path, task_info, file_paths, max_results=3,
                         score += 8.0    # Adjacent steps — same chapter context
                     elif dist <= 5:
                         score += 3.0    # Same wave area — weak proximity
+
+            # 5b. Invocation block proximity — sessions from same orchestrator invocation
+            # share domain context (same wave/phase). Boost same-invocation sessions.
+            # B-3: invocation_number stored in KI; A-2: used here for scoring.
+            # H-3: cur_invocation_number is pre-computed OUTSIDE the loop (see below loop setup).
+            if cur_invocation_number is not None:
+                past_inv = session.get("invocation_number")
+                if isinstance(past_inv, int):
+                    inv_dist = abs(past_inv - cur_invocation_number)
+                    if inv_dist == 0:
+                        score += 12.0  # Same invocation block — strong relevance
+                    elif inv_dist == 1:
+                        score += 5.0   # Adjacent invocation — shared phase context
 
             # 6. Temporal decay — recent sessions are more likely relevant
             # Max boost: +3.0 at age=0, linear decay to 0 at 30 days

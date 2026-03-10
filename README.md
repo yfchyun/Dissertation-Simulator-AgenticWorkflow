@@ -59,6 +59,7 @@ Translation: 한국어 번역             (Step 181-210)
 | **pCCS per-claim 신뢰도** | P1 Sandwich 아키텍처 — claim별 예측 신뢰도 점수. rewrite/proceed 자동 결정 |
 | **Predictive Debugging** | 코드 구조 스캔 → 실패 예측 → 적대적 검증 → 사전 조치 |
 | **Step Execution Registry** | `query_step.py` — 210-step 결정론적 agent/tier/critic/pCCS 매핑. Orchestrator 할루시네이션 원천봉쇄 |
+| **Step Consolidation** | 동일 에이전트의 연속 step을 하나의 호출로 통합. 210 step → 17 Orchestrator invocations. P1 결정론적 프롬프트 생성 + 원자적 SOT 전진 |
 | **Adversarial Dialogue** | @fact-checker + @reviewer 병렬 적대적 리뷰. Generator-Critic 반복 루프 |
 | **3-tier Fallback** | Team → Sub-agent → Direct 실행으로 복원력 보장 |
 | **Context Reset Model** | 4개 HITL 지점에서 안전한 컨텍스트 리셋 + 3-File Memory + IMMORTAL 섹션으로 복원 |
@@ -98,7 +99,7 @@ Dissertation-Simulator-AgenticWorkflow/
 │   │   ├── failure-predictor.md      (Predictive Debugging Phase B-1)
 │   │   └── ... (46개 논문 전문 에이전트 + 6개 기반 에이전트)
 │   ├── commands/              # 31개 Slash Commands (시스템 4 + 라우터 1 + 논문 26)
-│   ├── hooks/scripts/         # 107개 스크립트 (프로덕션 63 + 모듈 2 + 테스트 42)
+│   ├── hooks/scripts/         # 106개 스크립트 (프로덕션 62 + 모듈 2 + 테스트 42)
 │   │   ├── checklist_manager.py      (논문 SOT 관리)
 │   │   ├── query_workflow.py         (워크플로우 관측성)
 │   │   ├── validate_grounded_claim.py (claim 검증)
@@ -116,7 +117,7 @@ Dissertation-Simulator-AgenticWorkflow/
 └── thesis-output/             # 논문 산출물 (런타임 생성)
     └── [project-name]/
         ├── session.json       # 논문 SOT
-        ├── todo-checklist.md  # 150-step 체크리스트
+        ├── todo-checklist.md  # 210-step 체크리스트
         ├── research-synthesis.md  # 연구 합성
         ├── wave-results/      # Wave별 산출물
         └── checkpoints/       # 체크포인트
@@ -173,7 +174,7 @@ SRCS Unified Evaluation
 | 1 | **README.md** (이 파일) | 프로젝트 개요와 빠른 시작 |
 | 2 | [`DISSERTATION-SIMULATOR-USER-MANUAL.md`](DISSERTATION-SIMULATOR-USER-MANUAL.md) | 논문 워크플로우 사용법 |
 | 3 | [`DISSERTATION-SIMULATOR-ARCHITECTURE-AND-PHILOSOPHY.md`](DISSERTATION-SIMULATOR-ARCHITECTURE-AND-PHILOSOPHY.md) | 도메인 고유 아키텍처와 설계 철학 |
-| 4 | [`DECISION-LOG.md`](DECISION-LOG.md) | 설계 결정의 맥락과 근거 (ADR-001~070+) |
+| 4 | [`DECISION-LOG.md`](DECISION-LOG.md) | 설계 결정의 맥락과 근거 (ADR-001~070) |
 | - | [`AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md`](AGENTICWORKFLOW-ARCHITECTURE-AND-PHILOSOPHY.md) | (참고) 부모 프레임워크 설계 철학 |
 | - | [`AGENTICWORKFLOW-USER-MANUAL.md`](AGENTICWORKFLOW-USER-MANUAL.md) | (참고) 부모 프레임워크 사용법 |
 | - | [`soul.md`](soul.md) | (참고) DNA 유전 철학 |

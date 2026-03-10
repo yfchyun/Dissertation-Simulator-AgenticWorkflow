@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Step Execution Registry — deterministic step→execution parameters mapping.
 
-Eliminates Orchestrator hallucination at 4 critical decision points:
+Eliminates Orchestrator hallucination at 7 critical decision points:
   H-1: Step→Agent mapping (which agent executes this step?)
   H-2: pCCS mode selection (FULL or DEGRADED?)
   H-3: Critic agent routing (which critic reviews this step?)
   H-4: Tier selection (Tier 1/2/3?)
+  H-5: Step consolidation (which steps execute together as one call?)
+  H-6: Output size enforcement (minimum output bytes per step type)
+  H-7: Invocation planning (how many Orchestrator calls needed?)
 
 The Orchestrator calls this script INSTEAD of interpreting prose rules.
 All outputs are deterministic — no LLM interpretation needed.
@@ -16,6 +19,7 @@ Usage:
   python3 query_step.py --step 47 --field agent
   python3 query_step.py --list-agents
   python3 query_step.py --list-steps --agent literature-searcher
+  python3 query_step.py --invocation-plan [--project-dir <dir>] [--json]
 
 P1 Compliance: Pure stdlib, no LLM, deterministic, exit 0 always.
 """
@@ -199,6 +203,19 @@ _PHASE5_AGENTS: list[tuple[int, int, str, str]] = [
 _PHASE6_AGENTS: list[tuple[int, int, str, str]] = [
     (181, 210, "translator", "Translation step"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Step Consolidation (H-5) — deterministic grouping for multi-step execution
+# ---------------------------------------------------------------------------
+
+# Agents that must NOT be consolidated (each step needs individual execution).
+# translator: each translation targets a different source chapter, needs sequential
+#   glossary consistency. _orchestrator: administrative steps (HITL, gates, SOT records).
+_NO_CONSOLIDATE_AGENTS: set[str] = {"translator", "_orchestrator"}
+
+# Maximum steps in one consolidation group (safety cap).
+_MAX_CONSOLIDATION_SIZE: int = 6
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +476,168 @@ def _get_output_pattern(step: int, phase: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Consolidation helpers (H-5, H-6)
+# ---------------------------------------------------------------------------
+
+def _get_output_dir(step: int, phase: str) -> str:
+    """Return output directory for a step (without filename).
+
+    Used by consolidation to construct consolidated output file paths.
+    """
+    wave = _get_wave(step)
+    if wave is not None:
+        return f"wave-results/wave-{wave}"
+    if phase.startswith("phase_2"):
+        return "phase-2"
+    if phase.startswith("phase_3"):
+        return "phase-3"
+    if phase.startswith("phase_4"):
+        return "submission-package"
+    if phase.startswith("phase_6"):
+        return "translations"
+    return ""
+
+
+def _get_min_output_bytes(step: int, group_size: int) -> int:
+    """Return minimum expected output bytes for a step.
+
+    Conservative thresholds for _warn_if_output_too_small() P1 guard.
+    Returns 0 for steps without meaningful output requirements.
+    Non-blocking: advance guards use these as WARNING thresholds only.
+    """
+    # Wave 1-3 consolidated groups: comprehensive multi-task analysis
+    if 39 <= step <= 94 and group_size > 1:
+        return 30000
+    # Wave 4 consolidated groups: synthesis
+    if 99 <= step <= 106 and group_size > 1:
+        return 30000
+    # Phase 3 individual chapters (major content)
+    if 143 <= step <= 148:
+        return 15000
+    # Phase 3 abstract, references, appendices
+    if step in (149, 150, 151):
+        return 5000
+    # Phase 2 design steps (methodology/instruments)
+    if 123 <= step <= 131:
+        return 5000
+    # Phase 3 reviews and revisions
+    if step in (152, 153, 154, 155, 158):
+        return 3000
+    # Phase 4 publication steps
+    if 165 <= step <= 169:
+        return 3000
+    return 0
+
+
+def _get_consolidation_config(
+    step: int,
+    range_start: int,
+    range_end: int,
+    agent: str,
+    phase: str,
+) -> dict[str, Any]:
+    """Return consolidation configuration for a step.
+
+    Derives group from the matched _RANGE_AGENTS entry. Multi-step ranges
+    sharing the same agent form a consolidation group (executed as one call).
+
+    Returns:
+        dict with:
+        - consolidate_with: list of step numbers in the group
+        - consolidated_output_filename: full relative path (or None for single-step)
+        - min_output_bytes: minimum expected output size (0 = no minimum)
+    """
+    if agent in _NO_CONSOLIDATE_AGENTS:
+        return {
+            "consolidate_with": [step],
+            "consolidated_output_filename": None,
+            "min_output_bytes": 0,
+        }
+
+    # Cap group size at safety limit
+    actual_end = min(range_end, range_start + _MAX_CONSOLIDATION_SIZE - 1)
+    group = list(range(range_start, actual_end + 1))
+    group_size = len(group)
+
+    if group_size > 1:
+        output_dir = _get_output_dir(range_start, phase)
+        filename = f"step-{range_start:03d}-to-{actual_end:03d}-{agent}.md"
+        full_path = f"{output_dir}/{filename}" if output_dir else filename
+    else:
+        full_path = None
+
+    min_bytes = _get_min_output_bytes(step, group_size)
+
+    return {
+        "consolidate_with": group,
+        "consolidated_output_filename": full_path,
+        "min_output_bytes": min_bytes,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Invocation Plan (H-7) — deterministic Orchestrator call boundaries
+# ---------------------------------------------------------------------------
+
+# Each entry: (start_step, end_step, label)
+# Boundaries at HITL, gate, and phase transitions.
+_INVOCATION_PLAN: list[tuple[int, int, str]] = [
+    (1, 14, "Phase 0: Init + Topic Exploration"),
+    (15, 34, "Phase 0-D: Learning Mode"),
+    (35, 38, "HITL-1: Research Question"),
+    (39, 58, "Wave 1 + Gate 1"),
+    (59, 78, "Wave 2 + Gate 2"),
+    (79, 98, "Wave 3 + Gate 3"),
+    (99, 114, "Wave 4 + SRCS + Wave 5"),
+    (115, 120, "HITL-2: Literature Review Approval"),
+    (121, 140, "Phase 2: Research Design + HITL-3/4"),
+    (141, 142, "Phase 3: Outline + HITL-5"),
+    (143, 156, "Phase 3: Chapters + Reviews"),
+    (157, 160, "HITL-6 + Final Revision + HITL-7"),
+    (161, 164, "Phase 3: Translation + Archive"),
+    (165, 172, "Phase 4: Publication + HITL-8"),
+    (173, 180, "Phase 5: Finalization"),
+    (181, 195, "Phase 6: Translation Batch 1"),
+    (196, 210, "Phase 6: Translation Batch 2"),
+]
+
+
+def get_invocation_plan(current_step: int = 0) -> list[dict[str, Any]]:
+    """Return the deterministic list of Orchestrator invocations.
+
+    Each invocation defines a batch of steps for one Orchestrator call.
+    Boundaries are set at HITL, gate, and phase transitions. The main agent
+    (thesis-start.md) uses this plan to know exactly how many invocations
+    are needed, preventing premature termination.
+
+    Args:
+        current_step: Current workflow step (from SOT). Used to mark
+                      completed/current/pending status.
+
+    Returns:
+        List of dicts with: invocation, start, end, label, status, total
+    """
+    total = len(_INVOCATION_PLAN)
+    result: list[dict[str, Any]] = []
+    for idx, (start, end, label) in enumerate(_INVOCATION_PLAN, 1):
+        if current_step >= end:
+            status = "completed"
+        elif current_step >= start:
+            status = "in_progress"
+        else:
+            status = "pending"
+        result.append({
+            "invocation": idx,
+            "start": start,
+            "end": end,
+            "label": label,
+            "status": status,
+            "total": total,
+        })
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Core query function
 # ---------------------------------------------------------------------------
 
@@ -498,10 +677,14 @@ def query_step(step: int, research_type: str = "undecided") -> dict[str, Any]:
     # Find agent for this step
     agent = "_orchestrator"
     description = "Unknown step"
+    range_start = step
+    range_end = step
     for start, end, agent_name, desc in all_ranges:
         if start <= step <= end:
             agent = agent_name
             description = desc
+            range_start = start
+            range_end = end
             break
 
     # Tier determination — deterministic (from thesis-orchestrator.md Step-to-Tier Mapping)
@@ -518,6 +701,11 @@ def query_step(step: int, research_type: str = "undecided") -> dict[str, Any]:
     hitl = _HITL_STEPS.get(step)
     is_translation = step in _TRANSLATION_STEPS
     output_pattern = _get_output_pattern(step, phase)
+
+    # Consolidation (H-5, H-6)
+    consol = _get_consolidation_config(
+        step, range_start, range_end, agent, phase,
+    )
 
     return {
         "step": step,
@@ -544,6 +732,194 @@ def query_step(step: int, research_type: str = "undecided") -> dict[str, Any]:
         "hitl": hitl,
         "hitl_required": hitl is not None,
         "translation_required": is_translation,
+        # Consolidation (H-5, H-6)
+        "consolidate_with": consol["consolidate_with"],
+        "consolidated_output_filename": consol["consolidated_output_filename"],
+        "min_output_bytes": consol["min_output_bytes"],
+    }
+
+
+def generate_consolidated_prompt(
+    first_step: int,
+    last_step: int,
+    research_topic: str,
+    research_type: str = "undecided",
+    checklist_path: str | None = None,
+) -> dict[str, Any]:
+    """P1 deterministic: generate a fully rendered consolidated prompt.
+
+    Eliminates LLM hallucination risk by pre-computing ALL template variables:
+    - Step descriptions (from _RANGE_AGENTS, not LLM memory)
+    - Output filename (from _get_consolidation_config)
+    - Trace marker instructions
+    - Per-step section headings
+
+    Args:
+        first_step: First step in the consolidated group
+        last_step: Last step in the consolidated group
+        research_topic: The research question/topic string
+        research_type: "quantitative"/"qualitative"/"mixed"/"undecided"
+        checklist_path: Optional path to todo-checklist.md for richer descriptions
+
+    Returns:
+        dict with:
+        - prompt: str (fully rendered, zero unfilled template variables)
+        - agent: str (sub-agent to invoke)
+        - output_file: str (consolidated output filename)
+        - min_output_bytes: int
+
+    Raises:
+        ValueError: If step range is invalid or doesn't match a consolidation group boundary.
+    """
+    # Input validation (P1 — prevent misuse that causes semantic mismatches)
+    if first_step < 1 or last_step > 210:
+        raise ValueError(
+            f"Step range [{first_step}, {last_step}] out of bounds [1, 210]"
+        )
+    if first_step > last_step:
+        raise ValueError(
+            f"first_step ({first_step}) > last_step ({last_step})"
+        )
+
+    # Query first step to get agent and consolidation config
+    info = query_step(first_step, research_type)
+
+    if "error" in info:
+        raise ValueError(f"Invalid step {first_step}: {info['error']}")
+
+    # Validate that [first_step, last_step] matches the actual consolidation group
+    cw = info.get("consolidate_with", [first_step])
+    if len(cw) > 1:
+        expected_first = min(cw)
+        expected_last = max(cw)
+        if first_step != expected_first or last_step != expected_last:
+            raise ValueError(
+                f"Step range [{first_step}, {last_step}] does not match "
+                f"consolidation group boundary [{expected_first}, {expected_last}]. "
+                f"Use the exact group boundary from query_step()."
+            )
+
+    agent = info["agent"]
+    output_file = info.get("consolidated_output_filename") or info["output_path"]
+    min_bytes = info.get("min_output_bytes", 0)
+
+    # Build per-step sections with descriptions from the registry (P1 source)
+    step_sections: list[str] = []
+    for step in range(first_step, last_step + 1):
+        step_info = query_step(step, research_type)
+        desc = step_info["description"]
+
+        # Try richer description from checklist if available
+        if checklist_path:
+            try:
+                import re as _re
+                with open(checklist_path, "r", encoding="utf-8") as f:
+                    content = f.read(50_000)
+                m = _re.search(
+                    rf"^-\s*\[[ xX]\]\s*Step\s+{step}\s*:\s*(.+)$",
+                    content, _re.MULTILINE,
+                )
+                if m:
+                    desc = m.group(1).strip()[:200]
+            except Exception:
+                pass  # Fall back to registry description
+
+        step_sections.append(f"  ## Step {step}: {desc}")
+        step_sections.append(f"  [Content for step {step}]")
+        step_sections.append("")
+
+    sections_text = "\n".join(step_sections)
+
+    prompt = (
+        f"Execute steps {first_step}-{last_step}:\n\n"
+        f"{sections_text}\n"
+        f"  Research topic: {research_topic}\n"
+        f"  Output to: {output_file}\n\n"
+        f"  STRUCTURE REQUIREMENT: Each step MUST have its own level-2 heading "
+        f"(## Step N: description).\n"
+        f"  Claims for step N must include trace markers: [trace:step-N].\n"
+        f"  Write as a SINGLE comprehensive document with clear per-step structure.\n"
+        f"  Use GroundedClaim schema for all claims.\n"
+        f"  Minimum output size: {min_bytes} bytes."
+    )
+
+    return {
+        "prompt": prompt,
+        "agent": agent,
+        "output_file": output_file,
+        "min_output_bytes": min_bytes,
+        "first_step": first_step,
+        "last_step": last_step,
+    }
+
+
+def get_next_execution_step(
+    current_step: int,
+    research_type: str = "undecided",
+) -> dict[str, Any]:
+    """P1 deterministic: compute the next step to execute, handling consolidation restart.
+
+    After a context reset, current_step may be mid-consolidation-group.
+    This function deterministically computes whether to restart the group
+    or proceed to the next step.
+
+    Args:
+        current_step: Current step from SOT (steps 1-N completed)
+        research_type: Research type for Phase 2 agent resolution
+
+    Returns:
+        dict with:
+        - next_step: int (the step to execute next)
+        - reason: "normal" | "restart_consolidated_group"
+        - consolidated_group: list[int] | None (if restarting a group)
+        - agent: str
+        - description: str
+    """
+    if current_step < 0:
+        current_step = 0  # Treat negative as "nothing completed"
+
+    if current_step >= 210:
+        return {
+            "next_step": None,
+            "reason": "workflow_completed",
+            "consolidated_group": None,
+            "agent": None,
+            "description": "All 210 steps completed",
+        }
+
+    candidate = current_step + 1
+    info = query_step(candidate, research_type)
+
+    # Guard: query_step returns error dict for out-of-range steps
+    if "error" in info:
+        return {
+            "next_step": candidate,
+            "reason": "normal",
+            "consolidated_group": None,
+            "agent": "_orchestrator",
+            "description": info.get("error", "Unknown step"),
+        }
+
+    consolidate_with = info.get("consolidate_with", [candidate])
+    group_start = min(consolidate_with) if consolidate_with else candidate
+
+    if len(consolidate_with) > 1 and group_start < candidate:
+        # Mid-consolidation: current_step is inside a group that wasn't fully completed.
+        # Restart from the beginning of the group.
+        return {
+            "next_step": group_start,
+            "reason": "restart_consolidated_group",
+            "consolidated_group": consolidate_with,
+            "agent": info["agent"],
+            "description": info["description"],
+        }
+
+    return {
+        "next_step": candidate,
+        "reason": "normal",
+        "consolidated_group": consolidate_with if len(consolidate_with) > 1 else None,
+        "agent": info["agent"],
+        "description": info["description"],
     }
 
 
@@ -586,6 +962,14 @@ def main() -> int:
     parser.add_argument("--list-agents", action="store_true", help="List all agents and their step ranges")
     parser.add_argument("--list-steps", action="store_true", help="List steps for a specific agent (use with --agent)")
     parser.add_argument("--agent", help="Agent name (for --list-steps)")
+    parser.add_argument("--invocation-plan", action="store_true",
+                        help="Show invocation plan with completion status")
+    parser.add_argument("--next-step", action="store_true",
+                        help="Compute next execution step (handles consolidation restart)")
+    parser.add_argument("--consolidated-prompt", action="store_true",
+                        help="Generate fully rendered consolidated prompt (requires --step)")
+    parser.add_argument("--topic", help="Research topic for --consolidated-prompt")
+    parser.add_argument("--checklist", help="Path to todo-checklist.md for richer descriptions")
 
     args = parser.parse_args()
 
@@ -629,8 +1013,83 @@ def main() -> int:
                 print(f"{args.agent}: no steps assigned")
         return 0
 
+    if args.invocation_plan:
+        current_step = 0
+        if args.project_dir:
+            try:
+                import os
+                sot_path = os.path.join(args.project_dir, "session.json")
+                if os.path.exists(sot_path):
+                    with open(sot_path, "r", encoding="utf-8") as f:
+                        sot = json.load(f)
+                    current_step = sot.get("current_step", 0)
+            except (json.JSONDecodeError, IOError):
+                pass
+        plan = get_invocation_plan(current_step)
+        if args.json:
+            print(json.dumps(plan, indent=2))
+        else:
+            for entry in plan:
+                marker = {"completed": "x", "in_progress": ">", "pending": " "}
+                m = marker.get(entry["status"], " ")
+                print(f"  [{m}] {entry['invocation']:2d}/{entry['total']} "
+                      f"Steps {entry['start']:3d}-{entry['end']:3d}: "
+                      f"{entry['label']}")
+        return 0
+
+    if args.next_step:
+        current_step = 0
+        if args.project_dir:
+            try:
+                sot_path = os.path.join(args.project_dir, "session.json")
+                if os.path.exists(sot_path):
+                    with open(sot_path, "r", encoding="utf-8") as f:
+                        sot = json.load(f)
+                    current_step = sot.get("current_step", 0)
+            except (json.JSONDecodeError, IOError):
+                pass
+        result = get_next_execution_step(current_step, research_type)
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            ns = result["next_step"]
+            if ns is None:
+                print("Workflow completed (all 210 steps done)")
+            else:
+                print(f"Next step: {ns} ({result['description']})")
+                print(f"  Agent: {result['agent']}")
+                print(f"  Reason: {result['reason']}")
+                if result["consolidated_group"]:
+                    cg = result["consolidated_group"]
+                    print(f"  Consolidated group: steps {cg[0]}-{cg[-1]}")
+        return 0
+
+    if args.consolidated_prompt:
+        if args.step is None:
+            parser.error("--consolidated-prompt requires --step")
+            return 1
+        info = query_step(args.step, research_type)
+        cw = info.get("consolidate_with", [args.step])
+        if len(cw) <= 1:
+            print(f"ERROR: Step {args.step} is not part of a consolidated group",
+                  file=sys.stderr)
+            return 1
+        topic = args.topic or "(research topic not provided)"
+        result = generate_consolidated_prompt(
+            first_step=min(cw),
+            last_step=max(cw),
+            research_topic=topic,
+            research_type=research_type,
+            checklist_path=args.checklist,
+        )
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(result["prompt"])
+        return 0
+
     if args.step is None:
-        parser.error("--step is required (or use --list-agents)")
+        parser.error("--step is required (or use --list-agents / --invocation-plan / --next-step)")
         return 1
 
     result = query_step(args.step, research_type)
@@ -675,6 +1134,12 @@ def main() -> int:
         if result['gate_after']:
             print(f"  Gate after: {result['gate_after']}")
         print(f"  Output: {result['output_path']}")
+        if len(result.get('consolidate_with', [])) > 1:
+            cw = result['consolidate_with']
+            print(f"  Consolidate: steps {cw[0]}-{cw[-1]} ({len(cw)} steps)")
+            print(f"  Consolidated file: {result['consolidated_output_filename']}")
+        if result.get('min_output_bytes', 0) > 0:
+            print(f"  Min output: {result['min_output_bytes']} bytes")
 
     return 0
 

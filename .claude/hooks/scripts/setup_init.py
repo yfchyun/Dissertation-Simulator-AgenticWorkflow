@@ -110,7 +110,7 @@ REQUIRED_SCRIPTS = [
     "validate_team_synthesis.py",
     # Type checking hook
     "run_mypy_check.py",
-    # Step Execution Registry — H-1~H-4 hallucination containment (Phase L)
+    # Step Execution Registry — H-1~H-7 hallucination containment (Phase L)
     "query_step.py",
     # KBSI — Knowledge-Based Self-Improvement (Phase M)
     "self_improve_manager.py",

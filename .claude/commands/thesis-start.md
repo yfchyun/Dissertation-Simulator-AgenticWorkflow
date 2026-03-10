@@ -35,37 +35,49 @@ Based on current_step and input_mode in SOT:
 | Phase 3 steps | Thesis writing with Agent Team |
 | Phase 4 steps | Publication strategy |
 
-### Step 3: Execute via Orchestrator
+### Step 3: Get Invocation Plan
 
-Invoke the thesis-orchestrator as a sub-agent. Pass the full execution context:
+Query the P1-computed invocation plan to determine remaining orchestrator invocations:
+
+```bash
+python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/scripts/query_step.py \
+  --invocation-plan --step {current_step} --project-dir "$CLAUDE_PROJECT_DIR/thesis-output/{project}"
+```
+
+Where `{current_step}` is the value obtained from Step 1's SOT status.
+
+This returns a list of invocation blocks (17 total), each with `start`, `end`, `label`, and `status` (pending/in_progress/completed). Use this to determine which invocations remain.
+
+### Step 4: Execute via Orchestrator Loop
+
+For each **pending** or **in_progress** invocation block from the plan, invoke the thesis-orchestrator:
 
 ```
 Agent: subagent_type="thesis-orchestrator", prompt="
   Project directory: thesis-output/{project}
   Current step: {current_step} (from SOT)
-  Current phase: {phase}
+  Invocation: {invocation_number}/{total_invocations} — {label}
+  Step range: {start}-{end}
   Execution mode: {execution_mode}
   Research topic: {research_question}
 
-  Execute the next step(s) following your Execution Protocol.
-  For team-based steps, use Tier 1 (Agent Team) first.
+  Execute steps {start} through {end} following your Execution Protocol.
+  Use step consolidation where query_step.py indicates (consolidate_with > 1 step).
   Report back: completed steps, outputs created, any gate results.
 "
 ```
 
-The orchestrator will:
-1. Determine execution tier (Team / Sub-agent / Direct) based on phase
-2. Create Agent Team for wave/phase steps, or call sub-agents for sequential steps
-3. Execute in English, validate output (L0 Anti-Skip + pACS)
-4. Call @translator for Korean pair
-5. Update SOT (outputs, current_step, active_team)
-6. Return execution summary
+**After each orchestrator return:**
+1. Re-read SOT to verify progress
+2. Display countdown to user: `[{completed}/{total} invocations — {pct}%]`
+3. If orchestrator did not reach the expected `end` step, re-invoke for the remaining range
+4. Proceed to the next pending invocation block
 
 **Do NOT perform orchestrator duties directly.** Always delegate to the thesis-orchestrator agent, which has the full tool set (TeamCreate, TaskCreate, SendMessage, TaskList, TaskUpdate) and execution protocol.
 
-### Step 4: Report Progress (Korean)
+### Step 5: Report Progress (Korean)
 
-After each step completion, show:
+After each orchestrator invocation, show:
 - Completed step description
 - Current progress (step/total, percentage)
 - Next step preview

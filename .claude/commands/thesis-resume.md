@@ -32,6 +32,21 @@ Based on SOT current_step, identify:
 - What is the next step to execute
 - Whether any gate is pending
 
+### Step 3.5: Check for Mid-Consolidation State
+
+Use the P1 deterministic helper to compute the next execution step — handles consolidation
+restart logic automatically (no manual math required):
+
+```bash
+python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/scripts/query_step.py \
+  --next-step --project-dir "$CLAUDE_PROJECT_DIR/thesis-output/{project}" --json
+```
+
+Output includes `next_step`, `reason` ("normal" or "restart_consolidated_group"), and
+`consolidated_group` (list of step numbers if applicable). If `reason` is
+"restart_consolidated_group", the entire group must be re-executed from `next_step`.
+This is also surfaced by `restore_context.py` in the IMMORTAL section.
+
 ### Step 4: Restore Checkpoint (if available)
 
 ```bash
